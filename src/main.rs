@@ -1,34 +1,35 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::ops::Not;
 use std::path::Path;
-use std::str;
+use std::{io, str};
 
 #[rustfmt::skip]
 #[derive(Debug, Clone)]
-enum ObjectKind<'a> {
+enum ObjectKind {
     Int(isize),
-    List(Vec<Object<'a>>),
-    Tuple { data: Vec<Object<'a>>, is_quoted: bool },
+    List(Vec<Object>),
+    Tuple { data: Vec<Object>, is_quoted: bool },
     Str(String),
     Bool(bool),
-    Symbol { data: &'a str, is_quoted: bool },
+    Symbol { data: String, is_quoted: bool },
 }
 
 #[derive(Debug, Clone)]
-struct Object<'a> {
-    kind: ObjectKind<'a>,
+struct Object {
+    kind: ObjectKind,
     line: usize, // TODO: Use in error message
 }
 
-impl<'a> From<ObjectKind<'a>> for Object<'a> {
-    fn from(kind: ObjectKind<'a>) -> Self {
+impl From<ObjectKind> for Object {
+    fn from(kind: ObjectKind) -> Self {
         Self { kind, line: 0 }
     }
 }
 
-impl Object<'_> {
+impl Object {
     fn value<T>(&self) -> Result<&T> {
         use std::any::type_name as tname;
         use std::mem::transmute as trans;
@@ -47,18 +48,18 @@ impl Object<'_> {
         Ok(unsafe {
             match &self.kind {
                 Int(i) => err_if_neq!(trans(i), isize, T),
-                List(v) => err_if_neq!(trans(v), Vec<Object<'_>>, T),
-                Tuple { data, .. } => err_if_neq!(trans(data), Vec<Object<'_>>, T),
+                List(v) => err_if_neq!(trans(v), Vec<Object>, T),
+                Tuple { data, .. } => err_if_neq!(trans(data), Vec<Object>, T),
                 Str(s) => err_if_neq!(trans(s), String, T),
                 Bool(b) => err_if_neq!(trans(b), bool, T),
-                Symbol { data, .. } => err_if_neq!(trans(data), &str, T),
+                Symbol { data, .. } => err_if_neq!(trans(data), String, T),
             }
         })
     }
 
     #[cfg(debug_assertions)]
     fn traverse(&self) {
-        fn traverse(obj: &Object<'_>, indent: Option<usize>) {
+        fn traverse(obj: &Object, indent: Option<usize>) {
             let indent = indent.unwrap_or(0);
             print!("{}", " ".repeat(indent));
 
@@ -70,15 +71,11 @@ impl Object<'_> {
                 Int(i) => println!("Int: {}", i),
                 List(v) => {
                     println!("List:");
-                    for o in v {
-                        traverse(o, Some(indent + STEP));
-                    }
+                    v.iter().for_each(|o| traverse(o, Some(indent + STEP)));
                 }
                 Tuple { data, is_quoted } => {
                     println!("Tuple (is_quoted = {}):", is_quoted);
-                    for o in data {
-                        traverse(o, Some(indent + STEP));
-                    }
+                    data.iter().for_each(|o| traverse(o, Some(indent + STEP)));
                 }
                 Str(s) => println!("Str: {:?}", s),
                 Bool(b) => println!("Bool: {}", b),
@@ -92,29 +89,27 @@ impl Object<'_> {
 }
 
 #[derive(Debug)]
-enum Proc<'a> {
-    Aocla(Object<'a>),
-    Rust(fn(&mut AoclaCtx<'a>) -> Result),
+enum Proc {
+    Aocla(Object),
+    Rust(fn(&mut AoclaCtx) -> Result),
 }
-
-type StackFrame<'a> = HashMap<&'a str, Object<'a>>;
 
 #[derive(Debug, Default)]
-struct AoclaCtx<'a> {
-    stack: Vec<Object<'a>>,
-    proc: HashMap<&'a str, Proc<'a>>,
-    frame: StackFrame<'a>,
-    cur_proc_name: Option<&'a str>,
+struct AoclaCtx {
+    stack: Vec<Object>,
+    proc: HashMap<String, Proc>,
+    frame: HashMap<String, Object>,
+    cur_proc_name: Option<String>,
 }
 
-impl<'a> AoclaCtx<'a> {
-    fn new() -> Result<Self> {
+impl AoclaCtx {
+    fn new() -> Self {
         let mut ctx = Self::default();
-        ctx.load_library()?;
-        Ok(ctx)
+        ctx.load_library();
+        ctx
     }
 
-    fn pop_stack(&mut self) -> Result<Object<'a>> {
+    fn pop_stack(&mut self) -> Result<Object> {
         self.stack.pop().ok_or("Out of stack")
     }
 
@@ -127,7 +122,7 @@ impl<'a> AoclaCtx<'a> {
             let a = *a.value::<isize>()?;
 
             ctx.stack.push(Object::from(ObjectKind::Int(
-                match ctx.cur_proc_name.unwrap() {
+                match ctx.cur_proc_name.as_ref().unwrap().as_str() {
                     "+" => a + b,
                     "-" => a - b,
                     "*" => a * b,
@@ -152,27 +147,44 @@ impl<'a> AoclaCtx<'a> {
                 Bool(b) => print!("{}", b),
                 Symbol { data, .. } => print!("{}", data),
             }
+
+            let should_print_nl = ctx
+                .cur_proc_name
+                .as_ref()
+                .is_some_and(|s| s.ends_with("ln"));
+
+            if should_print_nl {
+                println!();
+            } else {
+                io::stdout().flush().unwrap();
+            }
+
             Ok(())
         }
     }
 
-    fn load_library(&mut self) -> Result {
-        self.proc.insert("+", Proc::Rust(self.basic_math()));
-        self.proc.insert("-", Proc::Rust(self.basic_math()));
-        self.proc.insert("*", Proc::Rust(self.basic_math()));
-        self.proc.insert("/", Proc::Rust(self.basic_math()));
-        self.proc.insert("print", Proc::Rust(self.print_proc()));
-        Ok(())
+    #[inline]
+    fn add_proc(&mut self, name: &str, proc: Proc) {
+        self.proc.insert(name.to_owned(), proc);
     }
 
-    fn call_proc(&mut self, data: &'a str, f: impl Fn(&mut Self) -> Result) -> Result<()> {
-        let prev_proc_name = self.cur_proc_name;
+    fn load_library(&mut self) {
+        self.add_proc("+", Proc::Rust(self.basic_math()));
+        self.add_proc("-", Proc::Rust(self.basic_math()));
+        self.add_proc("*", Proc::Rust(self.basic_math()));
+        self.add_proc("/", Proc::Rust(self.basic_math()));
+        self.add_proc("print", Proc::Rust(self.print_proc()));
+        self.add_proc("println", Proc::Rust(self.print_proc()));
+    }
+
+    fn call_proc(&mut self, data: String, f: impl Fn(&mut Self) -> Result) -> Result<()> {
+        let prev_proc_name = self.cur_proc_name.clone();
         let prev_stack_frame = self.frame.clone();
 
         self.cur_proc_name = Some(data);
 
         // TODO: Implement `upeval` by not creating new frame
-        self.frame = StackFrame::default();
+        self.frame = Default::default();
 
         f(self)?;
 
@@ -182,11 +194,11 @@ impl<'a> AoclaCtx<'a> {
         Ok(())
     }
 
-    fn call_aocla_proc(&mut self, data: &'a str, obj: Object<'a>) -> Result<()> {
+    fn call_aocla_proc(&mut self, data: String, obj: Object) -> Result<()> {
         self.call_proc(data, |ctx| ctx.eval(obj.clone()))
     }
 
-    fn dequote_and_push(&mut self, obj: &Object<'a>) {
+    fn dequote_and_push(&mut self, obj: &Object) {
         let mut notq = obj.clone();
         match notq.kind {
             ObjectKind::Tuple {
@@ -202,56 +214,59 @@ impl<'a> AoclaCtx<'a> {
         self.stack.push(notq);
     }
 
-    fn eval(&mut self, obj: Object<'a>) -> Result {
-        let ObjectKind::List(data) = obj.kind else {
-            return Err("First object is not a List");
-        };
-
+    fn eval_tuple(&mut self, data: &Vec<Object>) -> Result {
         for obj in data {
+            let ObjectKind::Symbol { data, .. } = &obj.kind else {
+                return Err("Cannot capture non-symbol objects");
+            };
+            let obj = self.pop_stack()?;
+            self.frame.insert(data.clone(), obj);
+        }
+        Ok(())
+    }
+
+    fn eval_symbol(&mut self, data: &String) -> Result {
+        if let Some(data) = data.strip_prefix('$') {
+            let Some(local) = self.frame.get(data) else {
+                return Err("Unbound local variable");
+            };
+            self.stack.push(local.clone());
+        } else {
+            let Some(proc) = self.proc.get(data) else {
+                return Err("Unbound procedure");
+            };
+            match proc {
+                Proc::Rust(f) => self.call_proc(data.clone(), *f)?,
+                Proc::Aocla(o) => self.call_aocla_proc(data.clone(), o.clone())?,
+            }
+        }
+        Ok(())
+    }
+
+    fn eval(&mut self, root_obj: Object) -> Result {
+        let root_obj_list: &Vec<Object> = root_obj.value()?;
+
+        for obj in root_obj_list {
             match &obj.kind {
                 ObjectKind::Tuple { data, is_quoted } => {
                     if *is_quoted {
-                        self.dequote_and_push(&obj);
+                        self.dequote_and_push(obj);
                         return Ok(());
                     }
 
                     if self.stack.len() < data.len() {
                         return Err("Out of stack while capturing local");
                     }
-
-                    for _ in 0..data.len() {
-                        self.stack.pop();
-                    }
-
-                    for obj in data {
-                        let ObjectKind::Symbol { data, .. } = obj.kind else {
-                            return Err("Cannot capture non-symbol objects");
-                        };
-                        self.frame.insert(data, obj.clone());
-                    }
+                    self.eval_tuple(data)?;
                 }
                 ObjectKind::Symbol { data, is_quoted } => {
                     if *is_quoted {
-                        self.dequote_and_push(&obj);
+                        self.dequote_and_push(obj);
                         return Ok(());
                     }
-
-                    if data.starts_with('$') {
-                        let Some(local) = self.frame.get(data) else {
-                            return Err("Ubound local variable");
-                        };
-                        self.stack.push(local.clone());
-                    } else {
-                        let Some(proc) = self.proc.get(data) else {
-                            return Err("Symbol not bound to procedure");
-                        };
-                        match proc {
-                            Proc::Rust(f) => self.call_proc(data, *f)?,
-                            Proc::Aocla(o) => self.call_aocla_proc(data, o.clone())?,
-                        }
-                    }
+                    self.eval_symbol(data)?;
                 }
-                _ => self.stack.push(obj),
+                _ => self.stack.push(obj.clone()),
             }
         }
         Ok(())
@@ -259,14 +274,15 @@ impl<'a> AoclaCtx<'a> {
 }
 
 #[derive(Debug)]
-struct Parser<'a> {
-    src: &'a [u8],
+struct Parser {
+    src: Vec<u8>,
     idx: usize,
     line: usize,
 }
 
-impl<'a> Parser<'a> {
-    fn new(src: &'a [u8]) -> Self {
+impl Parser {
+    fn new(src: &str) -> Self {
+        let src = format!("[{}]", src).bytes().collect();
         Self {
             src,
             idx: 0,
@@ -306,7 +322,7 @@ impl<'a> Parser<'a> {
         (self.curr() == b'-' && self.next().is_ascii_digit()) || self.curr().is_ascii_digit()
     }
 
-    fn parse_integer(&mut self) -> ObjectKind<'a> {
+    fn parse_integer(&mut self) -> ObjectKind {
         let start = self.idx;
         while self.curr().is_ascii_digit() || self.curr() == b'-' {
             self.idx += 1;
@@ -338,7 +354,7 @@ impl<'a> Parser<'a> {
         self.is_quote() && self.next() == b'('
     }
 
-    fn parse_sequence_until(&mut self, stop_bracket: u8) -> Result<ObjectKind<'a>> {
+    fn parse_sequence_until(&mut self, stop_bracket: u8) -> Result<ObjectKind> {
         let is_quoted = self.is_quote();
         if is_quoted {
             self.idx += 1;
@@ -383,7 +399,7 @@ impl<'a> Parser<'a> {
             )
     }
 
-    fn parse_symbol(&mut self) -> ObjectKind<'a> {
+    fn parse_symbol(&mut self) -> ObjectKind {
         let is_quoted = self.is_quote();
         if is_quoted {
             self.idx += 1;
@@ -394,7 +410,9 @@ impl<'a> Parser<'a> {
             self.idx += 1;
         }
 
-        let data = str::from_utf8(&self.src[start..self.idx]).unwrap();
+        let data = str::from_utf8(&self.src[start..self.idx])
+            .unwrap()
+            .to_owned();
         ObjectKind::Symbol { data, is_quoted }
     }
 
@@ -403,7 +421,7 @@ impl<'a> Parser<'a> {
         self.curr() == b'#'
     }
 
-    fn parse_boolean(&mut self) -> Result<ObjectKind<'a>> {
+    fn parse_boolean(&mut self) -> Result<ObjectKind> {
         let state = self.next();
         if state != b't' && state != b'f' {
             return Err("Booleans are either #t or #f");
@@ -417,7 +435,7 @@ impl<'a> Parser<'a> {
         self.curr() == b'"'
     }
 
-    fn parse_string(&mut self) -> Result<ObjectKind<'a>> {
+    fn parse_string(&mut self) -> Result<ObjectKind> {
         self.idx += 1;
 
         let start = self.idx;
@@ -449,7 +467,7 @@ impl<'a> Parser<'a> {
         Ok(ObjectKind::Str(str))
     }
 
-    fn parse_object(&mut self) -> Result<Object<'a>> {
+    fn parse_object(&mut self) -> Result<Object> {
         self.consume_space();
         Ok(Object {
             line: self.line,
@@ -476,26 +494,38 @@ fn eval_file<P>(filename: P) -> Result
 where
     P: AsRef<Path>,
 {
-    let buf = std::fs::read_to_string(filename).map_err(|_| "Failed to read file")?;
-    let src = format!("[{}]", buf);
+    let buf =
+        std::fs::read_to_string(filename).map_err(|_| "Failed to read file (does it exists?)")?;
 
-    let mut parser = Parser::new(src.as_bytes());
+    let mut parser = Parser::new(&buf);
     let obj = parser.parse_object()?;
-    obj.traverse();
 
-    let mut ctx = AoclaCtx::new()?;
+    let mut ctx = AoclaCtx::new();
     ctx.eval(obj)?;
 
-    // for obj in ctx.stack {
-    //     print!("{:?} ", obj.kind);
-    // }
-    // println!();
+    Ok(())
+}
 
+fn repl() -> Result {
+    let mut ctx = AoclaCtx::new();
+    loop {
+        let mut buf = String::new();
+        io::stdin().read_line(&mut buf).unwrap();
+
+        match buf.trim() {
+            "quit" | "exit" => break,
+            code => {
+                let mut parser = Parser::new(code);
+                let root_obj = parser.parse_object()?;
+                ctx.eval(root_obj)?;
+            }
+        }
+    }
     Ok(())
 }
 
 type Result<T = ()> = std::result::Result<T, &'static str>;
 
 fn main() -> Result {
-    eval_file("examples/hello.aocla")
+    repl()
 }
