@@ -49,7 +49,7 @@ impl Object<'_> {
                 Int(i) => err_if_neq!(trans(i), isize, T),
                 List(v) => err_if_neq!(trans(v), Vec<Object<'_>>, T),
                 Tuple { data, .. } => err_if_neq!(trans(data), Vec<Object<'_>>, T),
-                Str(s) => err_if_neq!(trans(s), &str, T),
+                Str(s) => err_if_neq!(trans(s), String, T),
                 Bool(b) => err_if_neq!(trans(b), bool, T),
                 Symbol { data, .. } => err_if_neq!(trans(data), &str, T),
             }
