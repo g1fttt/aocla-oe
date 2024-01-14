@@ -2,9 +2,9 @@
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::ops::Not;
+use std::mem::{self, Discriminant};
 use std::path::Path;
-use std::{io, str};
+use std::{fs, io, str};
 
 #[rustfmt::skip]
 #[derive(Debug, Clone)]
@@ -55,6 +55,11 @@ impl Object {
                 Symbol { data, .. } => err_if_neq!(trans(data), String, T),
             }
         })
+    }
+
+    #[inline]
+    fn kind(&self) -> Discriminant<ObjectKind> {
+        mem::discriminant(&self.kind)
     }
 
     #[cfg(debug_assertions)]
@@ -158,7 +163,6 @@ impl AoclaCtx {
             } else {
                 io::stdout().flush().unwrap();
             }
-
             Ok(())
         }
     }
@@ -177,11 +181,11 @@ impl AoclaCtx {
         self.add_proc("println", Proc::Rust(self.print_proc()));
     }
 
-    fn call_proc(&mut self, data: String, f: impl Fn(&mut Self) -> Result) -> Result<()> {
+    fn call_proc(&mut self, proc_name: String, f: impl Fn(&mut Self) -> Result) -> Result {
         let prev_proc_name = self.cur_proc_name.clone();
         let prev_stack_frame = self.frame.clone();
 
-        self.cur_proc_name = Some(data);
+        self.cur_proc_name = Some(proc_name);
 
         // TODO: Implement `upeval` by not creating new frame
         self.frame = Default::default();
@@ -194,7 +198,7 @@ impl AoclaCtx {
         Ok(())
     }
 
-    fn call_aocla_proc(&mut self, data: String, obj: Object) -> Result<()> {
+    fn call_aocla_proc(&mut self, data: String, obj: Object) -> Result {
         self.call_proc(data, |ctx| ctx.eval(obj.clone()))
     }
 
@@ -251,20 +255,19 @@ impl AoclaCtx {
                 ObjectKind::Tuple { data, is_quoted } => {
                     if *is_quoted {
                         self.dequote_and_push(obj);
-                        return Ok(());
+                    } else {
+                        if self.stack.len() < data.len() {
+                            return Err("Out of stack while capturing local");
+                        }
+                        self.eval_tuple(data)?;
                     }
-
-                    if self.stack.len() < data.len() {
-                        return Err("Out of stack while capturing local");
-                    }
-                    self.eval_tuple(data)?;
                 }
                 ObjectKind::Symbol { data, is_quoted } => {
                     if *is_quoted {
                         self.dequote_and_push(obj);
-                        return Ok(());
+                    } else {
+                        self.eval_symbol(data)?;
                     }
-                    self.eval_symbol(data)?;
                 }
                 _ => self.stack.push(obj.clone()),
             }
@@ -275,14 +278,14 @@ impl AoclaCtx {
 
 #[derive(Debug)]
 struct Parser {
-    src: Vec<u8>,
+    src: Vec<char>,
     idx: usize,
     line: usize,
 }
 
 impl Parser {
     fn new(src: &str) -> Self {
-        let src = format!("[{}]", src).bytes().collect();
+        let src = format!("[{}]", src).chars().collect();
         Self {
             src,
             idx: 0,
@@ -291,27 +294,27 @@ impl Parser {
     }
 
     #[inline]
-    fn curr(&self) -> u8 {
+    fn curr(&self) -> char {
         self.src[self.idx]
     }
 
     #[inline]
-    fn next(&self) -> u8 {
+    fn next(&self) -> char {
         self.src[self.idx + 1]
     }
 
     fn consume_space(&mut self) {
         loop {
             while self.curr().is_ascii_whitespace() {
-                if self.curr() == b'\n' {
+                if self.curr() == '\n' {
                     self.line += 1;
                 }
                 self.idx += 1;
             }
-            if self.curr() != b'/' || self.next() != b'/' {
+            if self.curr() != '/' || self.next() != '/' {
                 break;
             }
-            while self.curr() != b'\n' {
+            while self.curr() != '\n' {
                 self.idx += 1;
             }
         }
@@ -319,16 +322,17 @@ impl Parser {
 
     #[inline]
     fn is_integer(&self) -> bool {
-        (self.curr() == b'-' && self.next().is_ascii_digit()) || self.curr().is_ascii_digit()
+        (self.curr() == '-' && self.next().is_ascii_digit()) || self.curr().is_ascii_digit()
     }
 
     fn parse_integer(&mut self) -> ObjectKind {
         let start = self.idx;
-        while self.curr().is_ascii_digit() || self.curr() == b'-' {
+        while self.curr().is_ascii_digit() || self.curr() == '-' {
             self.idx += 1;
         }
-        let num = std::str::from_utf8(&self.src[start..self.idx])
-            .unwrap()
+        let num = self.src[start..self.idx]
+            .iter()
+            .collect::<String>()
             .parse()
             .unwrap();
         ObjectKind::Int(num)
@@ -336,25 +340,25 @@ impl Parser {
 
     #[inline]
     fn is_list(&self) -> bool {
-        self.curr() == b'['
+        self.curr() == '['
     }
 
     #[inline]
     fn is_tuple(&self) -> bool {
-        self.curr() == b'('
+        self.curr() == '('
     }
 
     #[inline]
     fn is_quote(&self) -> bool {
-        self.curr() == b'\''
+        self.curr() == '\''
     }
 
     #[inline]
     fn is_quoted_tuple(&self) -> bool {
-        self.is_quote() && self.next() == b'('
+        self.is_quote() && self.next() == '('
     }
 
-    fn parse_sequence_until(&mut self, stop_bracket: u8) -> Result<ObjectKind> {
+    fn parse_sequence_until(&mut self, stop_bracket: char) -> Result<ObjectKind> {
         let is_quoted = self.is_quote();
         if is_quoted {
             self.idx += 1;
@@ -367,8 +371,8 @@ impl Parser {
             if self.curr() == stop_bracket {
                 self.idx += 1;
                 return Ok(match stop_bracket {
-                    b']' => ObjectKind::List(data),
-                    b')' => ObjectKind::Tuple { data, is_quoted },
+                    ']' => ObjectKind::List(data),
+                    ')' => ObjectKind::Tuple { data, is_quoted },
                     _ => unreachable!(),
                 });
             }
@@ -384,18 +388,7 @@ impl Parser {
         self.curr().is_ascii_alphabetic()
             || matches!(
                 self.curr(),
-                b'@' | b'$'
-                    | b'+'
-                    | b'-'
-                    | b'*'
-                    | b'/'
-                    | b'='
-                    | b'?'
-                    | b'%'
-                    | b'>'
-                    | b'<'
-                    | b'_'
-                    | b'\''
+                '@' | '$' | '+' | '-' | '*' | '/' | '=' | '?' | '%' | '>' | '<' | '_' | '\''
             )
     }
 
@@ -410,61 +403,58 @@ impl Parser {
             self.idx += 1;
         }
 
-        let data = str::from_utf8(&self.src[start..self.idx])
-            .unwrap()
-            .to_owned();
+        let data = self.src[start..self.idx].iter().collect();
         ObjectKind::Symbol { data, is_quoted }
     }
 
     #[inline]
     fn is_boolean(&self) -> bool {
-        self.curr() == b'#'
+        self.curr() == '#'
     }
 
     fn parse_boolean(&mut self) -> Result<ObjectKind> {
         let state = self.next();
-        if state != b't' && state != b'f' {
+        if state != 't' && state != 'f' {
             return Err("Booleans are either #t or #f");
         }
         self.idx += 2;
-        Ok(ObjectKind::Bool(state == b't'))
+        Ok(ObjectKind::Bool(state == 't'))
     }
 
     #[inline]
     fn is_string(&self) -> bool {
-        self.curr() == b'"'
+        self.curr() == '"'
     }
 
     fn parse_string(&mut self) -> Result<ObjectKind> {
         self.idx += 1;
 
         let start = self.idx;
-        while self.curr() != b'"' {
+        while self.curr() != '"' {
             self.idx += 1;
         }
 
-        let mut backslash = false;
-        let str: String = str::from_utf8(&self.src[start..self.idx])
-            .unwrap()
-            .chars()
-            .filter_map(|c| {
-                if backslash {
-                    backslash = false;
-                    Some(match c {
-                        'n' => '\n',
-                        't' => '\t',
-                        'r' => '\r',
-                        c => c,
-                    })
-                } else {
-                    backslash = c == '\\';
-                    backslash.not().then_some(c)
-                }
-            })
-            .collect();
+        let mut chars = self.src[start..self.idx].iter();
+
+        let mut buf = String::new();
+        while let Some(&c) = chars.next() {
+            if c == '\\' {
+                let Some(nc) = chars.next() else {
+                    break;
+                };
+                buf.push(match nc {
+                    'n' => '\n',
+                    't' => '\t',
+                    'r' => '\r',
+                    &nc => nc,
+                });
+            } else {
+                buf.push(c);
+            }
+        }
 
         self.idx += 1;
-        Ok(ObjectKind::Str(str))
+        Ok(ObjectKind::Str(buf))
     }
 
     fn parse_object(&mut self) -> Result<Object> {
@@ -474,9 +464,9 @@ impl Parser {
             kind: if self.is_integer() {
                 self.parse_integer()
             } else if self.is_list() {
-                self.parse_sequence_until(b']')?
+                self.parse_sequence_until(']')?
             } else if self.is_tuple() || self.is_quoted_tuple() {
-                self.parse_sequence_until(b')')?
+                self.parse_sequence_until(')')?
             } else if self.is_symbol() {
                 self.parse_symbol()
             } else if self.is_boolean() {
@@ -494,8 +484,7 @@ fn eval_file<P>(filename: P) -> Result
 where
     P: AsRef<Path>,
 {
-    let buf =
-        std::fs::read_to_string(filename).map_err(|_| "Failed to read file (does it exists?)")?;
+    let buf = fs::read_to_string(filename).map_err(|_| "Failed to read file (does it exists?)")?;
 
     let mut parser = Parser::new(&buf);
     let obj = parser.parse_object()?;
@@ -509,14 +498,19 @@ where
 fn repl() -> Result {
     let mut ctx = AoclaCtx::new();
     loop {
+        print!("> ");
+        io::stdout().flush().unwrap();
+
         let mut buf = String::new();
         io::stdin().read_line(&mut buf).unwrap();
 
         match buf.trim() {
-            "quit" | "exit" => break,
+            "quit" | "exit" | "leave" => break,
             code => {
                 let mut parser = Parser::new(code);
                 let root_obj = parser.parse_object()?;
+                root_obj.traverse();
+
                 ctx.eval(root_obj)?;
             }
         }
