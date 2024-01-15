@@ -1,10 +1,7 @@
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 use std::io::Write;
-use std::mem::{self, Discriminant};
 use std::path::Path;
-use std::{fs, io, str};
+use std::{error, fmt, fs, io, str};
 
 #[rustfmt::skip]
 #[derive(Debug, Clone)]
@@ -20,13 +17,8 @@ enum ObjectKind {
 #[derive(Debug, Clone)]
 struct Object {
     kind: ObjectKind,
-    line: usize, // TODO: Use in error message
-}
-
-impl From<ObjectKind> for Object {
-    fn from(kind: ObjectKind) -> Self {
-        Self { kind, line: 0 }
-    }
+    line: usize,
+    column: usize,
 }
 
 impl Object {
@@ -37,14 +29,13 @@ impl Object {
         macro_rules! err_if_neq {
             ($v:expr, $a:ty, $b:ty) => {{
                 if tname::<$a>() != tname::<$b>() {
-                    return Err("Type mismatch");
+                    return Err(error!(self.line, self.column, "Type mismatch"));
                 }
                 $v
             }};
         }
 
         use ObjectKind::*;
-
         Ok(unsafe {
             match &self.kind {
                 Int(i) => err_if_neq!(trans(i), isize, T),
@@ -57,21 +48,15 @@ impl Object {
         })
     }
 
-    #[inline]
-    fn kind(&self) -> Discriminant<ObjectKind> {
-        mem::discriminant(&self.kind)
-    }
-
     #[cfg(debug_assertions)]
     fn traverse(&self) {
         fn traverse(obj: &Object, indent: Option<usize>) {
             let indent = indent.unwrap_or(0);
             print!("{}", " ".repeat(indent));
 
-            use ObjectKind::*;
-
             const STEP: usize = 2;
 
+            use ObjectKind::*;
             match &obj.kind {
                 Int(i) => println!("Int: {}", i),
                 List(v) => {
@@ -93,18 +78,62 @@ impl Object {
     }
 }
 
-#[derive(Debug)]
 enum Proc {
     Aocla(Object),
     Rust(fn(&mut AoclaCtx) -> Result),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
+struct AoclaError {
+    message: &'static str,
+    line: usize,
+    column: usize,
+}
+
+impl fmt::Display for AoclaError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // TODO: Add also a filename
+        writeln!(
+            f,
+            "Error occured: {}. In line {} and column {}",
+            self.message, self.line, self.column
+        )
+    }
+}
+
+impl error::Error for AoclaError {}
+
+#[macro_export]
+macro_rules! error {
+    ($line:expr, $column:expr, $message:expr) => {
+        AoclaError {
+            message: $message,
+            line: $line,
+            column: $column,
+        }
+    };
+    ($object:expr, $message:expr) => {{
+        let object = $object.as_ref().unwrap();
+        AoclaError {
+            message: $message,
+            line: object.line,
+            column: object.column,
+        }
+    }};
+}
+
+#[inline(always)]
+fn column(idx: usize, line: usize) -> usize {
+    idx + 1 - line
+}
+
+#[derive(Default)]
 struct AoclaCtx {
     stack: Vec<Object>,
     proc: HashMap<String, Proc>,
     frame: HashMap<String, Object>,
     cur_proc_name: Option<String>,
+    cur_object: Option<Object>,
 }
 
 impl AoclaCtx {
@@ -115,36 +144,46 @@ impl AoclaCtx {
     }
 
     fn pop_stack(&mut self) -> Result<Object> {
-        self.stack.pop().ok_or("Out of stack")
+        self.stack
+            .pop()
+            .ok_or(error!(self.cur_object, "Out of stack"))
+    }
+
+    fn peek_stack(&self) -> Result<&Object> {
+        self.stack
+            .last()
+            .ok_or(error!(self.cur_object, "Out of stack"))
     }
 
     fn basic_math(&self) -> fn(&mut Self) -> Result {
         |ctx| {
-            let b = ctx.pop_stack()?;
-            let a = ctx.pop_stack()?;
+            let b_obj = ctx.pop_stack()?;
+            let a_obj = ctx.pop_stack()?;
 
-            let b = *b.value::<isize>()?;
-            let a = *a.value::<isize>()?;
+            let b = *b_obj.value::<isize>()?;
+            let a = *a_obj.value::<isize>()?;
 
-            ctx.stack.push(Object::from(ObjectKind::Int(
-                match ctx.cur_proc_name.as_ref().unwrap().as_str() {
+            ctx.stack.push(Object {
+                kind: ObjectKind::Int(match ctx.cur_proc_name.as_ref().unwrap().as_str() {
                     "+" => a + b,
                     "-" => a - b,
                     "*" => a * b,
                     "/" => a / b,
                     _ => unreachable!(),
-                },
-            )));
+                }),
+                line: b_obj.line,
+                column: b_obj.column,
+            });
             Ok(())
         }
     }
 
     fn print_proc(&self) -> fn(&mut Self) -> Result {
         |ctx| {
-            let obj = ctx.pop_stack()?;
+            let obj = ctx.peek_stack()?;
 
             use ObjectKind::*;
-            match obj.kind {
+            match &obj.kind {
                 Int(i) => print!("{}", i),
                 List(v) => print!("{:?}", v), // TODO: Pretty print
                 Tuple { data, .. } => print!("{:?}", data),
@@ -221,7 +260,7 @@ impl AoclaCtx {
     fn eval_tuple(&mut self, data: &Vec<Object>) -> Result {
         for obj in data {
             let ObjectKind::Symbol { data, .. } = &obj.kind else {
-                return Err("Cannot capture non-symbol objects");
+                return Err(error!(self.cur_object, "Cannot capture non-symbol objects"));
             };
             let obj = self.pop_stack()?;
             self.frame.insert(data.clone(), obj);
@@ -232,12 +271,12 @@ impl AoclaCtx {
     fn eval_symbol(&mut self, data: &String) -> Result {
         if let Some(data) = data.strip_prefix('$') {
             let Some(local) = self.frame.get(data) else {
-                return Err("Unbound local variable");
+                return Err(error!(self.cur_object, "Unbound local variable"));
             };
             self.stack.push(local.clone());
         } else {
             let Some(proc) = self.proc.get(data) else {
-                return Err("Unbound procedure");
+                return Err(error!(self.cur_object, "Unbound procedure"));
             };
             match proc {
                 Proc::Rust(f) => self.call_proc(data.clone(), *f)?,
@@ -251,13 +290,17 @@ impl AoclaCtx {
         let root_obj_list: &Vec<Object> = root_obj.value()?;
 
         for obj in root_obj_list {
+            self.cur_object = Some(obj.clone());
             match &obj.kind {
                 ObjectKind::Tuple { data, is_quoted } => {
                     if *is_quoted {
                         self.dequote_and_push(obj);
                     } else {
                         if self.stack.len() < data.len() {
-                            return Err("Out of stack while capturing local");
+                            return Err(error!(
+                                self.cur_object,
+                                "Out of stack while capturing local variable"
+                            ));
                         }
                         self.eval_tuple(data)?;
                     }
@@ -281,6 +324,7 @@ struct Parser {
     src: Vec<char>,
     idx: usize,
     line: usize,
+    column: usize,
 }
 
 impl Parser {
@@ -290,6 +334,7 @@ impl Parser {
             src,
             idx: 0,
             line: 1,
+            column: 0,
         }
     }
 
@@ -339,13 +384,23 @@ impl Parser {
     }
 
     #[inline]
-    fn is_list(&self) -> bool {
+    fn is_list_start(&self) -> bool {
         self.curr() == '['
     }
 
     #[inline]
-    fn is_tuple(&self) -> bool {
+    fn is_list_end(&self) -> bool {
+        self.curr() == ']'
+    }
+
+    #[inline]
+    fn is_tuple_start(&self) -> bool {
         self.curr() == '('
+    }
+
+    #[inline]
+    fn is_tuple_end(&self) -> bool {
+        self.curr() == ')'
     }
 
     #[inline]
@@ -354,7 +409,7 @@ impl Parser {
     }
 
     #[inline]
-    fn is_quoted_tuple(&self) -> bool {
+    fn is_quoted_tuple_start(&self) -> bool {
         self.is_quote() && self.next() == '('
     }
 
@@ -368,6 +423,12 @@ impl Parser {
         let mut data = Vec::new();
         loop {
             self.consume_space();
+
+            // Earlier, we skipped the quote and the bracket.
+            // That's why we're doing `.wrapping_sub(2)`
+            let (start_line, start_column) =
+                (self.line, column(self.idx, self.line).wrapping_sub(2));
+
             if self.curr() == stop_bracket {
                 self.idx += 1;
                 return Ok(match stop_bracket {
@@ -379,7 +440,7 @@ impl Parser {
 
             data.push(self.parse_object()?);
             if self.idx >= self.src.len() {
-                return Err("List never closed");
+                return Err(error!(start_line, start_column, "Sequence never closed"));
             }
         }
     }
@@ -415,7 +476,10 @@ impl Parser {
     fn parse_boolean(&mut self) -> Result<ObjectKind> {
         let state = self.next();
         if state != 't' && state != 'f' {
-            return Err("Booleans are either #t or #f");
+            return Err(error!(
+                self.line,
+                self.column, "Booleans are either #t or #f"
+            ));
         }
         self.idx += 2;
         Ok(ObjectKind::Bool(state == 't'))
@@ -427,11 +491,15 @@ impl Parser {
     }
 
     fn parse_string(&mut self) -> Result<ObjectKind> {
+        let (start_line, start_column) = (self.line, column(self.idx, self.line));
         self.idx += 1;
 
         let start = self.idx;
         while self.curr() != '"' {
             self.idx += 1;
+            if self.idx >= self.src.len() {
+                return Err(error!(start_line, start_column, "String never closed"));
+            }
         }
 
         let (mut chars, mut buf) = {
@@ -462,13 +530,17 @@ impl Parser {
 
     fn parse_object(&mut self) -> Result<Object> {
         self.consume_space();
+
+        self.column = column(self.idx, self.line);
+
         Ok(Object {
             line: self.line,
+            column: self.column,
             kind: if self.is_integer() {
                 self.parse_integer()
-            } else if self.is_list() {
+            } else if self.is_list_start() {
                 self.parse_sequence_until(']')?
-            } else if self.is_tuple() || self.is_quoted_tuple() {
+            } else if self.is_tuple_start() || self.is_quoted_tuple_start() {
                 self.parse_sequence_until(')')?
             } else if self.is_symbol() {
                 self.parse_symbol()
@@ -477,7 +549,15 @@ impl Parser {
             } else if self.is_string() {
                 self.parse_string()?
             } else {
-                return Err("No object type starts like this");
+                return Err(error!(
+                    self.line,
+                    self.column,
+                    if self.is_list_end() || self.is_tuple_end() {
+                        "Sequnence never opened"
+                    } else {
+                        "No object type starts like this"
+                    }
+                ));
             },
         })
     }
@@ -487,10 +567,16 @@ fn eval_file<P>(filename: P) -> Result
 where
     P: AsRef<Path>,
 {
-    let buf = fs::read_to_string(filename).map_err(|_| "Failed to read file (does it exists?)")?;
+    let Ok(buf) = fs::read_to_string(&filename) else {
+        panic!(
+            "Failed to read file ({:?}). Does it exists?",
+            filename.as_ref()
+        );
+    };
 
     let mut parser = Parser::new(&buf);
     let obj = parser.parse_object()?;
+    obj.traverse();
 
     let mut ctx = AoclaCtx::new();
     ctx.eval(obj)?;
@@ -521,8 +607,10 @@ fn repl() -> Result {
     Ok(())
 }
 
-type Result<T = ()> = std::result::Result<T, &'static str>;
+type Result<T = ()> = std::result::Result<T, AoclaError>;
 
-fn main() -> Result {
-    repl()
+fn main() {
+    if let Err(err) = eval_file("examples/error.aocla") {
+        println!("{}", err);
+    }
 }
