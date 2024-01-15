@@ -156,7 +156,7 @@ impl AoclaCtx {
             let should_print_nl = ctx
                 .cur_proc_name
                 .as_ref()
-                .is_some_and(|s| s.ends_with("ln"));
+                .is_some_and(|s| s.as_str() == "println");
 
             if should_print_nl {
                 println!();
@@ -305,7 +305,7 @@ impl Parser {
 
     fn consume_space(&mut self) {
         loop {
-            while self.curr().is_ascii_whitespace() {
+            while self.curr().is_whitespace() {
                 if self.curr() == '\n' {
                     self.line += 1;
                 }
@@ -322,12 +322,12 @@ impl Parser {
 
     #[inline]
     fn is_integer(&self) -> bool {
-        (self.curr() == '-' && self.next().is_ascii_digit()) || self.curr().is_ascii_digit()
+        (self.curr() == '-' && self.next().is_numeric()) || self.curr().is_numeric()
     }
 
     fn parse_integer(&mut self) -> ObjectKind {
         let start = self.idx;
-        while self.curr().is_ascii_digit() || self.curr() == '-' {
+        while self.curr().is_numeric() || self.curr() == '-' {
             self.idx += 1;
         }
         let num = self.src[start..self.idx]
@@ -385,7 +385,7 @@ impl Parser {
     }
 
     fn is_symbol(&self) -> bool {
-        self.curr().is_ascii_alphabetic()
+        self.curr().is_alphabetic()
             || matches!(
                 self.curr(),
                 '@' | '$' | '+' | '-' | '*' | '/' | '=' | '?' | '%' | '>' | '<' | '_' | '\''
@@ -434,9 +434,11 @@ impl Parser {
             self.idx += 1;
         }
 
-        let mut chars = self.src[start..self.idx].iter();
+        let (mut chars, mut buf) = {
+            let chars = &self.src[start..self.idx];
+            (chars.iter(), String::with_capacity(chars.len()))
+        };
 
-        let mut buf = String::new();
         while let Some(&c) = chars.next() {
             if c == '\\' {
                 let Some(nc) = chars.next() else {
@@ -452,8 +454,9 @@ impl Parser {
                 buf.push(c);
             }
         }
-
         self.idx += 1;
+
+        buf.shrink_to_fit();
         Ok(ObjectKind::Str(buf))
     }
 
