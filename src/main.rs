@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
@@ -10,10 +11,10 @@ use std::{error, fmt, fs, io, str};
 enum ObjectKind {
     Int(isize),
     List(Vec<Object>),
-    Tuple { data: Vec<Object>, is_quoted: bool },
+    Tuple(Vec<Object>, bool),
     Str(String),
     Bool(bool),
-    Symbol { data: String, is_quoted: bool },
+    Symbol(String, bool),
 }
 
 #[derive(Debug, Clone)]
@@ -23,31 +24,13 @@ struct Object {
     column: usize,
 }
 
-impl Object {
-    fn value<T>(&self) -> Result<&T> {
-        use std::any::type_name as tname;
-        use std::mem::transmute as trans;
-
-        macro_rules! err_if_neq {
-            ($v:expr, $a:ty, $b:ty) => {{
-                if tname::<$a>() != tname::<$b>() {
-                    return Err(error!(self.line, self.column, "Type mismatch"));
-                }
-                $v
-            }};
+impl From<ObjectKind> for Object {
+    fn from(kind: ObjectKind) -> Self {
+        Self {
+            kind,
+            line: 0,
+            column: 0,
         }
-
-        use ObjectKind::*;
-        Ok(unsafe {
-            match &self.kind {
-                Int(i) => err_if_neq!(trans(i), isize, T),
-                List(v) => err_if_neq!(trans(v), Vec<Object>, T),
-                Tuple { data, .. } => err_if_neq!(trans(data), Vec<Object>, T),
-                Str(s) => err_if_neq!(trans(s), String, T),
-                Bool(b) => err_if_neq!(trans(b), bool, T),
-                Symbol { data, .. } => err_if_neq!(trans(data), String, T),
-            }
-        })
     }
 }
 
@@ -58,7 +41,7 @@ enum Proc {
 
 #[derive(Debug)]
 struct AoclaError {
-    message: &'static str,
+    message: String,
     line: usize,
     column: usize,
 }
@@ -80,7 +63,7 @@ impl error::Error for AoclaError {}
 macro_rules! error {
     ($line:expr, $column:expr, $message:expr) => {
         AoclaError {
-            message: $message,
+            message: $message.to_owned(),
             line: $line,
             column: $column,
         }
@@ -88,7 +71,7 @@ macro_rules! error {
     ($object:expr, $message:expr) => {{
         let object = $object.as_ref().unwrap();
         AoclaError {
-            message: $message,
+            message: $message.to_owned(),
             line: object.line,
             column: object.column,
         }
@@ -138,6 +121,12 @@ impl AoclaCtx {
         self.add_proc("-", Proc::Rust(arithmetic_proc()));
         self.add_proc("*", Proc::Rust(arithmetic_proc()));
         self.add_proc("/", Proc::Rust(arithmetic_proc()));
+        self.add_proc("=", Proc::Rust(compare_proc()));
+        self.add_proc("<>", Proc::Rust(compare_proc()));
+        self.add_proc(">=", Proc::Rust(compare_proc()));
+        self.add_proc("<=", Proc::Rust(compare_proc()));
+        self.add_proc(">", Proc::Rust(compare_proc()));
+        self.add_proc("<", Proc::Rust(compare_proc()));
         self.add_proc("print", Proc::Rust(print_proc()));
         self.add_proc("println", Proc::Rust(print_proc()));
     }
@@ -166,12 +155,7 @@ impl AoclaCtx {
     fn dequote_and_push(&mut self, obj: &Object) {
         let mut notq = obj.clone();
         match notq.kind {
-            ObjectKind::Tuple {
-                ref mut is_quoted, ..
-            }
-            | ObjectKind::Symbol {
-                ref mut is_quoted, ..
-            } => {
+            ObjectKind::Tuple(_, ref mut is_quoted) | ObjectKind::Symbol(_, ref mut is_quoted) => {
                 *is_quoted = false;
             }
             _ => unreachable!(),
@@ -181,11 +165,11 @@ impl AoclaCtx {
 
     fn eval_tuple(&mut self, data: &Vec<Object>) -> Result {
         for obj in data {
-            let ObjectKind::Symbol { data, .. } = &obj.kind else {
+            let ObjectKind::Symbol(sym, _) = &obj.kind else {
                 return Err(error!(self.cur_object, "Cannot capture non-symbol objects"));
             };
             let obj = self.pop_stack()?;
-            self.frame.insert(data.clone(), obj);
+            self.frame.insert(sym.clone(), obj);
         }
         Ok(())
     }
@@ -209,29 +193,34 @@ impl AoclaCtx {
     }
 
     fn eval(&mut self, root_obj: Object) -> Result {
-        let root_obj_list: &Vec<Object> = root_obj.value()?;
+        let ObjectKind::List(root_obj_list) = &root_obj.kind else {
+            return Err(error!(
+                root_obj.line,
+                root_obj.column, "Root object must be of type List"
+            ));
+        };
 
         for obj in root_obj_list {
             self.cur_object = Some(obj.clone());
             match &obj.kind {
-                ObjectKind::Tuple { data, is_quoted } => {
+                ObjectKind::Tuple(tuple, is_quoted) => {
                     if *is_quoted {
                         self.dequote_and_push(obj);
                     } else {
-                        if self.stack.len() < data.len() {
+                        if self.stack.len() < tuple.len() {
                             return Err(error!(
                                 self.cur_object,
                                 "Out of stack while capturing local variable"
                             ));
                         }
-                        self.eval_tuple(data)?;
+                        self.eval_tuple(tuple)?;
                     }
                 }
-                ObjectKind::Symbol { data, is_quoted } => {
+                ObjectKind::Symbol(sym, is_quoted) => {
                     if *is_quoted {
                         self.dequote_and_push(obj);
                     } else {
-                        self.eval_symbol(data)?;
+                        self.eval_symbol(sym)?;
                     }
                 }
                 _ => self.stack.push(obj.clone()),
@@ -246,20 +235,54 @@ fn arithmetic_proc() -> fn(&mut AoclaCtx) -> Result {
         let b_obj = ctx.pop_stack()?;
         let a_obj = ctx.pop_stack()?;
 
-        let b = *b_obj.value::<isize>()?;
-        let a = *a_obj.value::<isize>()?;
+        let (ObjectKind::Int(b), ObjectKind::Int(a)) = (b_obj.kind, a_obj.kind) else {
+            return Err(error!(ctx.cur_object, "Both objects must be of type Int"));
+        };
 
-        ctx.stack.push(Object {
-            kind: ObjectKind::Int(match ctx.cur_proc_name.as_ref().unwrap().as_str() {
+        ctx.stack.push(Object::from(ObjectKind::Int(
+            match ctx.cur_proc_name.as_deref().unwrap() {
                 "+" => a + b,
                 "-" => a - b,
                 "*" => a * b,
                 "/" => a / b,
                 _ => unreachable!(),
-            }),
-            line: b_obj.line,
-            column: b_obj.column,
-        });
+            },
+        )));
+        Ok(())
+    }
+}
+
+fn compare_proc() -> fn(&mut AoclaCtx) -> Result {
+    |ctx| {
+        let b_obj = ctx.pop_stack()?;
+        let a_obj = ctx.pop_stack()?;
+
+        use ObjectKind::*;
+        let ord = match (&a_obj.kind, &b_obj.kind) {
+            (Int(a), Int(b)) => a.cmp(b),
+            (Bool(a), Bool(b)) => a.cmp(b),
+            (Str(a), Symbol(b, _)) | (Symbol(b, _), Str(a)) => a.cmp(b),
+            (List(a), List(b))
+            | (Tuple(a, _), Tuple(b, _))
+            | (List(a), Tuple(b, _))
+            | (Tuple(b, _), List(a)) => a.len().cmp(&b.len()),
+            _ => {
+                ctx.stack.extend_from_slice(&[b_obj, a_obj]);
+                return Err(error!(ctx.cur_object, "Unable to compare two objects"));
+            }
+        };
+
+        let cur_proc_name = ctx.cur_proc_name.as_deref().unwrap();
+        ctx.stack
+            .push(Object::from(ObjectKind::Bool(match cur_proc_name {
+                "=" => ord == Ordering::Equal,
+                "<>" => ord != Ordering::Equal,
+                ">=" => ord == Ordering::Equal || ord == Ordering::Greater,
+                "<=" => ord == Ordering::Equal || ord == Ordering::Less,
+                ">" => ord == Ordering::Greater,
+                "<" => ord == Ordering::Less,
+                _ => unreachable!(),
+            })));
         Ok(())
     }
 }
@@ -272,10 +295,10 @@ fn print_proc() -> fn(&mut AoclaCtx) -> Result {
         match &obj.kind {
             Int(i) => print!("{}", i),
             List(v) => print!("{:?}", v), // TODO: Pretty print
-            Tuple { data, .. } => print!("{:?}", data),
+            Tuple(t, _) => print!("{:?}", t),
             Str(s) => print!("{}", s),
             Bool(b) => print!("{}", b),
-            Symbol { data, .. } => print!("{}", data),
+            Symbol(s, _) => print!("{}", s),
         }
 
         let should_print_nl = ctx
@@ -329,10 +352,10 @@ impl Parser {
                 }
                 self.idx += 1;
             }
-            if self.curr() != '/' || self.next() != '/' {
+            if self.curr() != ';' {
                 break;
             }
-            while self.curr() != '\n' {
+            while self.curr() != '\n' && self.idx < self.src.len() - 1 {
                 self.idx += 1;
             }
         }
@@ -382,7 +405,7 @@ impl Parser {
                 self.idx += 1;
                 return Ok(match rbracket {
                     ']' => ObjectKind::List(data),
-                    ')' => ObjectKind::Tuple { data, is_quoted },
+                    ')' => ObjectKind::Tuple(data, is_quoted),
                     _ => unreachable!(),
                 });
             }
@@ -402,8 +425,8 @@ impl Parser {
             self.idx += 1;
         }
 
-        let data = self.src[start..self.idx].iter().collect();
-        ObjectKind::Symbol { data, is_quoted }
+        let sym = self.src[start..self.idx].iter().collect();
+        ObjectKind::Symbol(sym, is_quoted)
     }
 
     fn parse_boolean(&mut self) -> Result<ObjectKind> {
@@ -466,7 +489,7 @@ impl Parser {
             column: self.column,
             kind: match self.curr() {
                 c if is_symbol(c) => self.parse_symbol(),
-                lb @ '(' | lb @ '[' => self.parse_sequence(lb)?,
+                lb @ ('(' | '[') => self.parse_sequence(lb)?,
                 '0'..='9' | '-' => self.parse_integer(),
                 '#' => self.parse_boolean()?,
                 '"' => self.parse_string()?,
@@ -481,10 +504,11 @@ impl Parser {
                     }
                 },
                 ')' | ']' => return Err(error!(self.line, self.column, "Sequence never opened")),
-                _ => {
+                c => {
                     return Err(error!(
                         self.line,
-                        self.column, "No object type starts like this"
+                        self.column,
+                        &format!("No object type starts like this: `{}`", c)
                     ))
                 }
             },
@@ -500,7 +524,6 @@ fn is_symbol(c: char) -> bool {
     | '+'
     | '-'
     | '*'
-    | '/'
     | '='
     | '?'
     | '%'
@@ -543,10 +566,14 @@ fn repl() {
             "quit" | "exit" | "leave" => break,
             code => {
                 let mut parser = Parser::new(code);
-                let Ok(root_obj) = parser.parse_object() else {
-                    continue;
-                };
-                let _ = ctx.eval(root_obj);
+                match parser.parse_object() {
+                    Ok(root_obj) => {
+                        if let Err(err) = ctx.eval(root_obj) {
+                            println!("{}", err);
+                        }
+                    }
+                    Err(err) => println!("{}", err),
+                }
             }
         }
     }
