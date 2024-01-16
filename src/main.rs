@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
@@ -47,35 +49,6 @@ impl Object {
             }
         })
     }
-
-    #[cfg(debug_assertions)]
-    fn traverse(&self) {
-        fn traverse(obj: &Object, indent: Option<usize>) {
-            let indent = indent.unwrap_or(0);
-            print!("{}", " ".repeat(indent));
-
-            const STEP: usize = 2;
-
-            use ObjectKind::*;
-            match &obj.kind {
-                Int(i) => println!("Int: {}", i),
-                List(v) => {
-                    println!("List:");
-                    v.iter().for_each(|o| traverse(o, Some(indent + STEP)));
-                }
-                Tuple { data, is_quoted } => {
-                    println!("Tuple (is_quoted = {}):", is_quoted);
-                    data.iter().for_each(|o| traverse(o, Some(indent + STEP)));
-                }
-                Str(s) => println!("Str: {:?}", s),
-                Bool(b) => println!("Bool: {}", b),
-                Symbol { data, is_quoted } => {
-                    println!("Symbol (is_quoted = {}): {}", is_quoted, data)
-                }
-            }
-        }
-        traverse(self, None);
-    }
 }
 
 enum Proc {
@@ -95,7 +68,7 @@ impl fmt::Display for AoclaError {
         // TODO: Add also a filename
         writeln!(
             f,
-            "Error occured: {}. In line {} and column {}",
+            "Error occured: {}. At line {} and column {}",
             self.message, self.line, self.column
         )
     }
@@ -155,69 +128,18 @@ impl AoclaCtx {
             .ok_or(error!(self.cur_object, "Out of stack"))
     }
 
-    fn basic_math(&self) -> fn(&mut Self) -> Result {
-        |ctx| {
-            let b_obj = ctx.pop_stack()?;
-            let a_obj = ctx.pop_stack()?;
-
-            let b = *b_obj.value::<isize>()?;
-            let a = *a_obj.value::<isize>()?;
-
-            ctx.stack.push(Object {
-                kind: ObjectKind::Int(match ctx.cur_proc_name.as_ref().unwrap().as_str() {
-                    "+" => a + b,
-                    "-" => a - b,
-                    "*" => a * b,
-                    "/" => a / b,
-                    _ => unreachable!(),
-                }),
-                line: b_obj.line,
-                column: b_obj.column,
-            });
-            Ok(())
-        }
-    }
-
-    fn print_proc(&self) -> fn(&mut Self) -> Result {
-        |ctx| {
-            let obj = ctx.peek_stack()?;
-
-            use ObjectKind::*;
-            match &obj.kind {
-                Int(i) => print!("{}", i),
-                List(v) => print!("{:?}", v), // TODO: Pretty print
-                Tuple { data, .. } => print!("{:?}", data),
-                Str(s) => print!("{}", s),
-                Bool(b) => print!("{}", b),
-                Symbol { data, .. } => print!("{}", data),
-            }
-
-            let should_print_nl = ctx
-                .cur_proc_name
-                .as_ref()
-                .is_some_and(|s| s.as_str() == "println");
-
-            if should_print_nl {
-                println!();
-            } else {
-                io::stdout().flush().unwrap();
-            }
-            Ok(())
-        }
-    }
-
     #[inline]
     fn add_proc(&mut self, name: &str, proc: Proc) {
         self.proc.insert(name.to_owned(), proc);
     }
 
     fn load_library(&mut self) {
-        self.add_proc("+", Proc::Rust(self.basic_math()));
-        self.add_proc("-", Proc::Rust(self.basic_math()));
-        self.add_proc("*", Proc::Rust(self.basic_math()));
-        self.add_proc("/", Proc::Rust(self.basic_math()));
-        self.add_proc("print", Proc::Rust(self.print_proc()));
-        self.add_proc("println", Proc::Rust(self.print_proc()));
+        self.add_proc("+", Proc::Rust(arithmetic_proc()));
+        self.add_proc("-", Proc::Rust(arithmetic_proc()));
+        self.add_proc("*", Proc::Rust(arithmetic_proc()));
+        self.add_proc("/", Proc::Rust(arithmetic_proc()));
+        self.add_proc("print", Proc::Rust(print_proc()));
+        self.add_proc("println", Proc::Rust(print_proc()));
     }
 
     fn call_proc(&mut self, proc_name: String, f: impl Fn(&mut Self) -> Result) -> Result {
@@ -319,6 +241,57 @@ impl AoclaCtx {
     }
 }
 
+fn arithmetic_proc() -> fn(&mut AoclaCtx) -> Result {
+    |ctx| {
+        let b_obj = ctx.pop_stack()?;
+        let a_obj = ctx.pop_stack()?;
+
+        let b = *b_obj.value::<isize>()?;
+        let a = *a_obj.value::<isize>()?;
+
+        ctx.stack.push(Object {
+            kind: ObjectKind::Int(match ctx.cur_proc_name.as_ref().unwrap().as_str() {
+                "+" => a + b,
+                "-" => a - b,
+                "*" => a * b,
+                "/" => a / b,
+                _ => unreachable!(),
+            }),
+            line: b_obj.line,
+            column: b_obj.column,
+        });
+        Ok(())
+    }
+}
+
+fn print_proc() -> fn(&mut AoclaCtx) -> Result {
+    |ctx| {
+        let obj = ctx.peek_stack()?;
+
+        use ObjectKind::*;
+        match &obj.kind {
+            Int(i) => print!("{}", i),
+            List(v) => print!("{:?}", v), // TODO: Pretty print
+            Tuple { data, .. } => print!("{:?}", data),
+            Str(s) => print!("{}", s),
+            Bool(b) => print!("{}", b),
+            Symbol { data, .. } => print!("{}", data),
+        }
+
+        let should_print_nl = ctx
+            .cur_proc_name
+            .as_ref()
+            .is_some_and(|s| s.as_str() == "println");
+
+        if should_print_nl {
+            println!();
+        } else {
+            io::stdout().flush().unwrap();
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 struct Parser {
     src: Vec<char>,
@@ -365,14 +338,9 @@ impl Parser {
         }
     }
 
-    #[inline]
-    fn is_integer(&self) -> bool {
-        (self.curr() == '-' && self.next().is_numeric()) || self.curr().is_numeric()
-    }
-
     fn parse_integer(&mut self) -> ObjectKind {
         let start = self.idx;
-        while self.curr().is_numeric() || self.curr() == '-' {
+        while matches!(self.curr(), '0'..='9' | '-') {
             self.idx += 1;
         }
         let num = self.src[start..self.idx]
@@ -383,42 +351,23 @@ impl Parser {
         ObjectKind::Int(num)
     }
 
-    #[inline]
-    fn is_list_start(&self) -> bool {
-        self.curr() == '['
-    }
-
-    #[inline]
-    fn is_list_end(&self) -> bool {
-        self.curr() == ']'
-    }
-
-    #[inline]
-    fn is_tuple_start(&self) -> bool {
-        self.curr() == '('
-    }
-
-    #[inline]
-    fn is_tuple_end(&self) -> bool {
-        self.curr() == ')'
-    }
-
-    #[inline]
-    fn is_quote(&self) -> bool {
-        self.curr() == '\''
-    }
-
-    #[inline]
-    fn is_quoted_tuple_start(&self) -> bool {
-        self.is_quote() && self.next() == '('
-    }
-
-    fn parse_sequence_until(&mut self, stop_bracket: char) -> Result<ObjectKind> {
-        let is_quoted = self.is_quote();
+    fn skip_if_quoted(&mut self) -> bool {
+        let is_quoted = self.curr() == '\'';
         if is_quoted {
             self.idx += 1;
         }
-        self.idx += 1; // [ or (
+        is_quoted
+    }
+
+    fn parse_sequence(&mut self, lbracket: char) -> Result<ObjectKind> {
+        let is_quoted = self.skip_if_quoted();
+        self.idx += 1; // left bracket
+
+        let rbracket = match lbracket {
+            '(' => ')',
+            '[' => ']',
+            _ => unreachable!(),
+        };
 
         let mut data = Vec::new();
         loop {
@@ -429,9 +378,9 @@ impl Parser {
             let (start_line, start_column) =
                 (self.line, column(self.idx, self.line).wrapping_sub(2));
 
-            if self.curr() == stop_bracket {
+            if self.curr() == rbracket {
                 self.idx += 1;
-                return Ok(match stop_bracket {
+                return Ok(match rbracket {
                     ']' => ObjectKind::List(data),
                     ')' => ObjectKind::Tuple { data, is_quoted },
                     _ => unreachable!(),
@@ -445,32 +394,16 @@ impl Parser {
         }
     }
 
-    fn is_symbol(&self) -> bool {
-        self.curr().is_alphabetic()
-            || matches!(
-                self.curr(),
-                '@' | '$' | '+' | '-' | '*' | '/' | '=' | '?' | '%' | '>' | '<' | '_' | '\''
-            )
-    }
-
     fn parse_symbol(&mut self) -> ObjectKind {
-        let is_quoted = self.is_quote();
-        if is_quoted {
-            self.idx += 1;
-        }
+        let is_quoted = self.skip_if_quoted();
 
         let start = self.idx;
-        while self.is_symbol() {
+        while is_symbol(self.curr()) {
             self.idx += 1;
         }
 
         let data = self.src[start..self.idx].iter().collect();
         ObjectKind::Symbol { data, is_quoted }
-    }
-
-    #[inline]
-    fn is_boolean(&self) -> bool {
-        self.curr() == '#'
     }
 
     fn parse_boolean(&mut self) -> Result<ObjectKind> {
@@ -483,11 +416,6 @@ impl Parser {
         }
         self.idx += 2;
         Ok(ObjectKind::Bool(state == 't'))
-    }
-
-    #[inline]
-    fn is_string(&self) -> bool {
-        self.curr() == '"'
     }
 
     fn parse_string(&mut self) -> Result<ObjectKind> {
@@ -536,31 +464,50 @@ impl Parser {
         Ok(Object {
             line: self.line,
             column: self.column,
-            kind: if self.is_integer() {
-                self.parse_integer()
-            } else if self.is_list_start() {
-                self.parse_sequence_until(']')?
-            } else if self.is_tuple_start() || self.is_quoted_tuple_start() {
-                self.parse_sequence_until(')')?
-            } else if self.is_symbol() {
-                self.parse_symbol()
-            } else if self.is_boolean() {
-                self.parse_boolean()?
-            } else if self.is_string() {
-                self.parse_string()?
-            } else {
-                return Err(error!(
-                    self.line,
-                    self.column,
-                    if self.is_list_end() || self.is_tuple_end() {
-                        "Sequnence never opened"
-                    } else {
-                        "No object type starts like this"
+            kind: match self.curr() {
+                c if is_symbol(c) => self.parse_symbol(),
+                lb @ '(' | lb @ '[' => self.parse_sequence(lb)?,
+                '0'..='9' | '-' => self.parse_integer(),
+                '#' => self.parse_boolean()?,
+                '"' => self.parse_string()?,
+                '\'' => match self.next() {
+                    c if is_symbol(c) => self.parse_symbol(),
+                    lb @ '(' => self.parse_sequence(lb)?,
+                    _ => {
+                        return Err(error!(
+                            self.line,
+                            self.column, "Only symbols and tuples can be quoted"
+                        ))
                     }
-                ));
+                },
+                ')' | ']' => return Err(error!(self.line, self.column, "Sequence never opened")),
+                _ => {
+                    return Err(error!(
+                        self.line,
+                        self.column, "No object type starts like this"
+                    ))
+                }
             },
         })
     }
+}
+
+fn is_symbol(c: char) -> bool {
+    matches!(c, 'a'..='z'
+    | 'A'..='Z'
+    | '@'
+    | '$'
+    | '+'
+    | '-'
+    | '*'
+    | '/'
+    | '='
+    | '?'
+    | '%'
+    | '>'
+    | '<'
+    | '_'
+    )
 }
 
 fn eval_file<P>(filename: P) -> Result
@@ -569,14 +516,13 @@ where
 {
     let Ok(buf) = fs::read_to_string(&filename) else {
         panic!(
-            "Failed to read file ({:?}). Does it exists?",
+            "Failed to read file: {:?}. Does it exists?",
             filename.as_ref()
         );
     };
 
     let mut parser = Parser::new(&buf);
     let obj = parser.parse_object()?;
-    obj.traverse();
 
     let mut ctx = AoclaCtx::new();
     ctx.eval(obj)?;
@@ -584,7 +530,7 @@ where
     Ok(())
 }
 
-fn repl() -> Result {
+fn repl() {
     let mut ctx = AoclaCtx::new();
     loop {
         print!("> ");
@@ -597,20 +543,18 @@ fn repl() -> Result {
             "quit" | "exit" | "leave" => break,
             code => {
                 let mut parser = Parser::new(code);
-                let root_obj = parser.parse_object()?;
-                root_obj.traverse();
-
-                ctx.eval(root_obj)?;
+                let Ok(root_obj) = parser.parse_object() else {
+                    continue;
+                };
+                let _ = ctx.eval(root_obj);
             }
         }
     }
-    Ok(())
 }
 
 type Result<T = ()> = std::result::Result<T, AoclaError>;
 
+#[inline(always)]
 fn main() {
-    if let Err(err) = eval_file("examples/error.aocla") {
-        println!("{}", err);
-    }
+    repl()
 }
