@@ -174,19 +174,19 @@ impl AoclaCtx {
         Ok(())
     }
 
-    fn eval_symbol(&mut self, data: &String) -> Result {
-        if let Some(data) = data.strip_prefix('$') {
-            let Some(local) = self.frame.get(data) else {
+    fn eval_symbol(&mut self, sym: &String) -> Result {
+        if let Some(sym) = sym.strip_prefix('$') {
+            let Some(local) = self.frame.get(sym) else {
                 return Err(error!(self.cur_object, "Unbound local variable"));
             };
             self.stack.push(local.clone());
         } else {
-            let Some(proc) = self.proc.get(data) else {
+            let Some(proc) = self.proc.get(sym) else {
                 return Err(error!(self.cur_object, "Unbound procedure"));
             };
             match proc {
-                Proc::Rust(f) => self.call_proc(data.clone(), *f)?,
-                Proc::Aocla(o) => self.call_aocla_proc(data.clone(), o.clone())?,
+                Proc::Rust(f) => self.call_proc(sym.clone(), *f)?,
+                Proc::Aocla(o) => self.call_aocla_proc(sym.clone(), o.clone())?,
             }
         }
         Ok(())
@@ -261,7 +261,10 @@ fn compare_proc() -> fn(&mut AoclaCtx) -> Result {
         let ord = match (&a_obj.kind, &b_obj.kind) {
             (Int(a), Int(b)) => a.cmp(b),
             (Bool(a), Bool(b)) => a.cmp(b),
-            (Str(a), Symbol(b, _)) | (Symbol(b, _), Str(a)) => a.cmp(b),
+            (Str(a), Str(b))
+            | (Symbol(a, _), Symbol(b, _))
+            | (Str(a), Symbol(b, _))
+            | (Symbol(b, _), Str(a)) => a.cmp(b),
             (List(a), List(b))
             | (Tuple(a, _), Tuple(b, _))
             | (List(a), Tuple(b, _))
