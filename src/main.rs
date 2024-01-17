@@ -390,11 +390,12 @@ fn proc_proc() -> fn(&mut AoclaCtx) -> Result {
 
 fn proc_if() -> fn(&mut AoclaCtx) -> Result {
     |ctx| {
-        let else_branch = ctx
-            .cur_proc_name
-            .as_deref()
-            .is_some_and(|s| s == "ifelse")
-            .then_some(ctx.pop_stack()?);
+        let cur_proc_name = ctx.cur_proc_name.as_deref();
+        let else_branch = if cur_proc_name.is_some_and(|s| s == "ifelse") {
+            Some(ctx.pop_stack()?)
+        } else {
+            None
+        };
 
         let if_branch = ctx.pop_stack()?;
         if !matches!(if_branch.kind, ObjectKind::List(_)) {
@@ -697,6 +698,8 @@ impl Parser {
             line: self.line,
             column: self.column,
             kind: match self.curr() {
+                c if is_symbol(c) => self.parse_symbol(),
+                lb @ ('(' | '[') => self.parse_sequence(lb)?,
                 '0'..='9' | '-' => self.parse_integer(),
                 '#' => self.parse_boolean()?,
                 '"' => self.parse_string()?,
@@ -711,8 +714,6 @@ impl Parser {
                     }
                 },
                 ')' | ']' => return Err(error!(self.line, self.column, "Sequence never opened")),
-                c if is_symbol(c) => self.parse_symbol(),
-                lb @ ('(' | '[') => self.parse_sequence(lb)?,
                 c => {
                     return Err(error!(
                         self.line,
