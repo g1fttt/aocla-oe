@@ -19,16 +19,11 @@ enum ObjectKind {
 struct Object {
     kind: ObjectKind,
     line: usize,
-    column: usize,
 }
 
 impl From<ObjectKind> for Object {
     fn from(kind: ObjectKind) -> Self {
-        Self {
-            kind,
-            line: 0,
-            column: 0,
-        }
+        Self { kind, line: 0 }
     }
 }
 
@@ -42,17 +37,12 @@ enum Proc {
 struct AoclaError {
     message: String,
     line: usize,
-    column: usize,
 }
 
 impl fmt::Display for AoclaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // TODO: Add also a filename
-        writeln!(
-            f,
-            "Error occured: {}. At line {} and column {}",
-            self.message, self.line, self.column
-        )
+        writeln!(f, "Error occured: {}. At line {}.", self.message, self.line)
     }
 }
 
@@ -60,22 +50,16 @@ impl error::Error for AoclaError {}
 
 #[macro_export]
 macro_rules! error {
-    ($line:expr, $column:expr, $message:expr) => {
+    ($line:expr, $message:expr,) => {
         AoclaError {
             message: $message.to_owned(),
             line: $line,
-            column: $column,
         }
     };
     ($object:expr, $message:expr) => {{
         let object = $object.as_ref().unwrap();
-        error!(object.line, object.column, $message)
+        error!(object.line, $message,)
     }};
-}
-
-#[inline(always)]
-fn column(idx: usize, line: usize) -> usize {
-    idx + 1 - line
 }
 
 #[derive(Default)]
@@ -178,8 +162,8 @@ impl AoclaCtx {
         self.stack.push(notq);
     }
 
-    fn eval_tuple(&mut self, tuple: &Vec<Object>) -> Result {
-        for obj in tuple {
+    fn eval_tuple(&mut self, tuple: &[Object]) -> Result {
+        for obj in tuple.iter().rev() {
             let ObjectKind::Symbol(sym, _) = &obj.kind else {
                 return Err(error!(
                     self.cur_object,
@@ -212,10 +196,7 @@ impl AoclaCtx {
 
     fn eval(&mut self, root_obj: &Object) -> Result {
         let ObjectKind::List(root_obj_list) = &root_obj.kind else {
-            return Err(error!(
-                root_obj.line,
-                root_obj.column, "Root object must be of type List"
-            ));
+            return Err(error!(root_obj.line, "Root object must be of type List",));
         };
 
         for obj in root_obj_list {
@@ -530,7 +511,6 @@ struct Parser {
     src: Vec<char>,
     idx: usize,
     line: usize,
-    column: usize,
 }
 
 impl Parser {
@@ -540,7 +520,6 @@ impl Parser {
             src,
             idx: 0,
             line: 1,
-            column: 0,
         }
     }
 
@@ -606,10 +585,7 @@ impl Parser {
         loop {
             self.consume_space();
 
-            // Earlier, we skipped the quote and the bracket.
-            // That's why we're doing `.wrapping_sub(2)`
-            let (start_line, start_column) =
-                (self.line, column(self.idx, self.line).wrapping_sub(2));
+            let start_line = self.line;
 
             if self.curr() == rbracket {
                 self.idx += 1;
@@ -622,7 +598,7 @@ impl Parser {
 
             data.push(self.parse_object()?);
             if self.idx >= self.src.len() {
-                return Err(error!(start_line, start_column, "Sequence never closed"));
+                return Err(error!(start_line, "Sequence never closed",));
             }
         }
     }
@@ -642,24 +618,21 @@ impl Parser {
     fn parse_boolean(&mut self) -> Result<ObjectKind> {
         let state = self.next();
         if state != 't' && state != 'f' {
-            return Err(error!(
-                self.line,
-                self.column, "Booleans are either #t or #f"
-            ));
+            return Err(error!(self.line, "Booleans are either #t or #f",));
         }
         self.idx += 2;
         Ok(ObjectKind::Bool(state == 't'))
     }
 
     fn parse_string(&mut self) -> Result<ObjectKind> {
-        let (start_line, start_column) = (self.line, column(self.idx, self.line));
+        let start_line = self.line;
         self.idx += 1;
 
         let start = self.idx;
         while self.curr() != '"' {
             self.idx += 1;
             if self.idx >= self.src.len() {
-                return Err(error!(start_line, start_column, "String never closed"));
+                return Err(error!(start_line, "String never closed",));
             }
         }
 
@@ -692,11 +665,8 @@ impl Parser {
     fn parse_object(&mut self) -> Result<Object> {
         self.consume_space();
 
-        self.column = column(self.idx, self.line);
-
         Ok(Object {
             line: self.line,
-            column: self.column,
             kind: match self.curr() {
                 c if is_symbol(c) => self.parse_symbol(),
                 lb @ ('(' | '[') => self.parse_sequence(lb)?,
@@ -706,19 +676,13 @@ impl Parser {
                 '\'' => match self.next() {
                     c if is_symbol(c) => self.parse_symbol(),
                     lb @ '(' => self.parse_sequence(lb)?,
-                    _ => {
-                        return Err(error!(
-                            self.line,
-                            self.column, "Only symbols and tuples can be quoted"
-                        ))
-                    }
+                    _ => return Err(error!(self.line, "Only symbols and tuples can be quoted",)),
                 },
-                ')' | ']' => return Err(error!(self.line, self.column, "Sequence never opened")),
+                ')' | ']' => return Err(error!(self.line, "Sequence never opened",)),
                 c => {
                     return Err(error!(
                         self.line,
-                        self.column,
-                        format!("No object type starts like this: `{}`", c)
+                        format!("No object type starts like this: `{}`", c),
                     ))
                 }
             },
