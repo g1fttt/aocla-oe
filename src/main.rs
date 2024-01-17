@@ -34,6 +34,7 @@ impl From<ObjectKind> for Object {
     }
 }
 
+#[derive(Debug)]
 enum Proc {
     Aocla(Object),
     Rust(fn(&mut AoclaCtx) -> Result),
@@ -70,11 +71,7 @@ macro_rules! error {
     };
     ($object:expr, $message:expr) => {{
         let object = $object.as_ref().unwrap();
-        AoclaError {
-            message: $message.to_owned(),
-            line: object.line,
-            column: object.column,
-        }
+        error!(object.line, object.column, $message)
     }};
 }
 
@@ -90,6 +87,7 @@ struct AoclaCtx {
     frame: HashMap<String, Object>,
     cur_proc_name: Option<String>,
     cur_object: Option<Object>,
+    calling_builtin: bool,
 }
 
 impl AoclaCtx {
@@ -129,6 +127,9 @@ impl AoclaCtx {
         self.add_proc("<", Proc::Rust(compare_proc()));
         self.add_proc("print", Proc::Rust(print_proc()));
         self.add_proc("println", Proc::Rust(print_proc()));
+        self.add_proc("proc", Proc::Rust(proc_proc()));
+        self.add_proc("if", Proc::Rust(proc_if()));
+        self.add_proc("ifelse", Proc::Rust(proc_if()));
     }
 
     fn call_proc(&mut self, proc_name: String, f: impl Fn(&mut Self) -> Result) -> Result {
@@ -137,8 +138,9 @@ impl AoclaCtx {
 
         self.cur_proc_name = Some(proc_name);
 
-        // TODO: Implement `upeval` by not creating new frame
-        self.frame = Default::default();
+        if !self.calling_builtin {
+            self.frame = Default::default();
+        }
 
         f(self)?;
 
@@ -148,8 +150,8 @@ impl AoclaCtx {
         Ok(())
     }
 
-    fn call_aocla_proc(&mut self, data: String, obj: Object) -> Result {
-        self.call_proc(data, |ctx| ctx.eval(obj.clone()))
+    fn call_aocla_proc(&mut self, proc_name: String, proc_body: Object) -> Result {
+        self.call_proc(proc_name, |ctx| ctx.eval(proc_body.clone()))
     }
 
     fn dequote_and_push(&mut self, obj: &Object) {
@@ -184,6 +186,7 @@ impl AoclaCtx {
             let Some(proc) = self.proc.get(sym) else {
                 return Err(error!(self.cur_object, "Unbound procedure"));
             };
+            self.calling_builtin = matches!(proc, Proc::Rust(_));
             match proc {
                 Proc::Rust(f) => self.call_proc(sym.clone(), *f)?,
                 Proc::Aocla(o) => self.call_aocla_proc(sym.clone(), o.clone())?,
@@ -318,6 +321,70 @@ fn print_proc() -> fn(&mut AoclaCtx) -> Result {
     }
 }
 
+fn proc_proc() -> fn(&mut AoclaCtx) -> Result {
+    |ctx| {
+        let ObjectKind::Symbol(name, _) = ctx.pop_stack()?.kind else {
+            return Err(error!(
+                ctx.cur_object,
+                "The object naming the procedure must be of type Symbol"
+            ));
+        };
+
+        let body = ctx.pop_stack()?;
+        if !matches!(body.kind, ObjectKind::List(_)) {
+            return Err(error!(
+                ctx.cur_object,
+                "The object representing the body of the procedure must be of type List"
+            ));
+        }
+
+        ctx.add_proc(&name, Proc::Aocla(body));
+
+        Ok(())
+    }
+}
+
+fn proc_if() -> fn(&mut AoclaCtx) -> Result {
+    |ctx| {
+        let else_branch = ctx
+            .cur_proc_name
+            .as_deref()
+            .is_some_and(|s| s == "ifelse")
+            .then_some(ctx.pop_stack()?);
+
+        let if_branch = ctx.pop_stack()?;
+        if !matches!(if_branch.kind, ObjectKind::List(_)) {
+            return Err(error!(ctx.cur_object, "`if` branch must be of type List"));
+        }
+
+        let cond = ctx.pop_stack()?;
+        if !matches!(cond.kind, ObjectKind::List(_)) {
+            return Err(error!(
+                ctx.cur_object,
+                "`if` condition must be of type List, that push Bool value to stack"
+            ));
+        }
+
+        ctx.eval(cond)?;
+        let ObjectKind::Bool(state) = ctx.pop_stack()?.kind else {
+            return Err(error!(
+                ctx.cur_object,
+                "`if` condition must push Bool value to stack"
+            ));
+        };
+
+        if state {
+            ctx.eval(if_branch)?;
+        } else if let Some(o) = else_branch {
+            if !matches!(o.kind, ObjectKind::List(_)) {
+                return Err(error!(ctx.cur_object, "`else` branch must be of type List"));
+            }
+            ctx.eval(o)?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 struct Parser {
     src: Vec<char>,
@@ -348,17 +415,18 @@ impl Parser {
     }
 
     fn consume_space(&mut self) {
-        loop {
-            while self.curr().is_whitespace() {
-                if self.curr() == '\n' {
-                    self.line += 1;
+        while self.curr().is_whitespace() {
+            if self.curr() == '\n' {
+                self.line += 1;
+            }
+            self.idx += 1;
+        }
+
+        if self.curr() == ';' {
+            while self.curr() != '\n' {
+                if self.idx >= self.src.len() - 1 {
+                    break;
                 }
-                self.idx += 1;
-            }
-            if self.curr() != ';' {
-                break;
-            }
-            while self.curr() != '\n' && self.idx < self.src.len() - 1 {
                 self.idx += 1;
             }
         }
@@ -424,7 +492,7 @@ impl Parser {
         let is_quoted = self.skip_if_quoted();
 
         let start = self.idx;
-        while is_symbol(self.curr()) {
+        while is_symbol(self.curr()) || self.curr().is_ascii_digit() {
             self.idx += 1;
         }
 
@@ -511,7 +579,7 @@ impl Parser {
                     return Err(error!(
                         self.line,
                         self.column,
-                        &format!("No object type starts like this: `{}`", c)
+                        format!("No object type starts like this: `{}`", c)
                     ))
                 }
             },
@@ -549,6 +617,7 @@ where
 
     let mut parser = Parser::new(&buf);
     let obj = parser.parse_object()?;
+    // dbg!(&obj);
 
     let mut ctx = AoclaCtx::new();
     ctx.eval(obj)?;
@@ -586,5 +655,5 @@ type Result<T = ()> = std::result::Result<T, AoclaError>;
 
 #[inline(always)]
 fn main() {
-    repl()
+    eval_file("examples/fib.aocla").unwrap();
 }

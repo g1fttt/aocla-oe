@@ -1,0 +1,8 @@
+[(n)
+  [$n 1 <=] [$n]
+  [$n 1 - fib
+   $n 2 - fib +]
+  ifelse
+] 'fib proc
+
+10 fib println
