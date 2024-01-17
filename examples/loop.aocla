@@ -1,0 +1,8 @@
+10 (counter) ; We will iterate 10 times
+
+[$counter 0 >] [
+  "Loop!" println
+  $counter 1 - (counter)
+] while
+
+"Loop is over!" println

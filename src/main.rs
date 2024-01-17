@@ -1,10 +1,8 @@
-#![allow(dead_code)]
-
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
-use std::{error, fmt, fs, io, str};
+use std::{env, error, fmt, fs, io, str};
 
 #[rustfmt::skip]
 #[derive(Debug, Clone)]
@@ -87,14 +85,13 @@ struct AoclaCtx {
     frame: HashMap<String, Object>,
     cur_proc_name: Option<String>,
     cur_object: Option<Object>,
-    calling_builtin: bool,
 }
 
 impl AoclaCtx {
-    fn new() -> Self {
+    fn new() -> Result<Self> {
         let mut ctx = Self::default();
-        ctx.load_library();
-        ctx
+        ctx.load_library()?;
+        Ok(ctx)
     }
 
     fn pop_stack(&mut self) -> Result<Object> {
@@ -109,12 +106,21 @@ impl AoclaCtx {
             .ok_or(error!(self.cur_object, "Out of stack"))
     }
 
+    fn add_proc_string(&mut self, name: &str, proc_body: &str) -> Result {
+        let mut parser = Parser::new(proc_body);
+        let obj = parser.parse_object()?;
+
+        self.add_proc(name, Proc::Aocla(obj));
+
+        Ok(())
+    }
+
     #[inline]
     fn add_proc(&mut self, name: &str, proc: Proc) {
         self.proc.insert(name.to_owned(), proc);
     }
 
-    fn load_library(&mut self) {
+    fn load_library(&mut self) -> Result {
         self.add_proc("+", Proc::Rust(arithmetic_proc()));
         self.add_proc("-", Proc::Rust(arithmetic_proc()));
         self.add_proc("*", Proc::Rust(arithmetic_proc()));
@@ -130,32 +136,35 @@ impl AoclaCtx {
         self.add_proc("proc", Proc::Rust(proc_proc()));
         self.add_proc("if", Proc::Rust(proc_if()));
         self.add_proc("ifelse", Proc::Rust(proc_if()));
+        self.add_proc("while", Proc::Rust(proc_while()));
+        self.add_proc("get", Proc::Rust(proc_get()));
+        self.add_proc_string("dup", "(x) $x $x")?;
+        self.add_proc_string("swap", "(x y) $y $x")?;
+        self.add_proc_string("drop", "(_)")?;
+        Ok(())
     }
 
     fn call_proc(&mut self, proc_name: String, f: impl Fn(&mut Self) -> Result) -> Result {
         let prev_proc_name = self.cur_proc_name.clone();
-        let prev_stack_frame = self.frame.clone();
 
         self.cur_proc_name = Some(proc_name);
-
-        if !self.calling_builtin {
-            self.frame = Default::default();
-        }
-
         f(self)?;
-
-        self.frame = prev_stack_frame;
         self.cur_proc_name = prev_proc_name;
 
         Ok(())
     }
 
     fn call_aocla_proc(&mut self, proc_name: String, proc_body: Object) -> Result {
-        self.call_proc(proc_name, |ctx| ctx.eval(proc_body.clone()))
+        let prev_stack_frame = self.frame.clone();
+
+        self.frame = Default::default();
+        self.call_proc(proc_name, |ctx| ctx.eval(&proc_body))?;
+        self.frame = prev_stack_frame;
+
+        Ok(())
     }
 
-    fn dequote_and_push(&mut self, obj: &Object) {
-        let mut notq = obj.clone();
+    fn dequote_and_push(&mut self, mut notq: Object) {
         match notq.kind {
             ObjectKind::Tuple(_, ref mut is_quoted) | ObjectKind::Symbol(_, ref mut is_quoted) => {
                 *is_quoted = false;
@@ -165,10 +174,13 @@ impl AoclaCtx {
         self.stack.push(notq);
     }
 
-    fn eval_tuple(&mut self, data: &Vec<Object>) -> Result {
-        for obj in data {
+    fn eval_tuple(&mut self, tuple: &Vec<Object>) -> Result {
+        for obj in tuple {
             let ObjectKind::Symbol(sym, _) = &obj.kind else {
-                return Err(error!(self.cur_object, "Cannot capture non-symbol objects"));
+                return Err(error!(
+                    self.cur_object,
+                    "Only objects of type Symbol can be captured"
+                ));
             };
             let obj = self.pop_stack()?;
             self.frame.insert(sym.clone(), obj);
@@ -186,7 +198,6 @@ impl AoclaCtx {
             let Some(proc) = self.proc.get(sym) else {
                 return Err(error!(self.cur_object, "Unbound procedure"));
             };
-            self.calling_builtin = matches!(proc, Proc::Rust(_));
             match proc {
                 Proc::Rust(f) => self.call_proc(sym.clone(), *f)?,
                 Proc::Aocla(o) => self.call_aocla_proc(sym.clone(), o.clone())?,
@@ -195,7 +206,7 @@ impl AoclaCtx {
         Ok(())
     }
 
-    fn eval(&mut self, root_obj: Object) -> Result {
+    fn eval(&mut self, root_obj: &Object) -> Result {
         let ObjectKind::List(root_obj_list) = &root_obj.kind else {
             return Err(error!(
                 root_obj.line,
@@ -208,7 +219,7 @@ impl AoclaCtx {
             match &obj.kind {
                 ObjectKind::Tuple(tuple, is_quoted) => {
                     if *is_quoted {
-                        self.dequote_and_push(obj);
+                        self.dequote_and_push(obj.clone());
                     } else {
                         if self.stack.len() < tuple.len() {
                             return Err(error!(
@@ -221,7 +232,7 @@ impl AoclaCtx {
                 }
                 ObjectKind::Symbol(sym, is_quoted) => {
                     if *is_quoted {
-                        self.dequote_and_push(obj);
+                        self.dequote_and_push(obj.clone());
                     } else {
                         self.eval_symbol(sym)?;
                     }
@@ -365,7 +376,7 @@ fn proc_if() -> fn(&mut AoclaCtx) -> Result {
             ));
         }
 
-        ctx.eval(cond)?;
+        ctx.eval(&cond)?;
         let ObjectKind::Bool(state) = ctx.pop_stack()?.kind else {
             return Err(error!(
                 ctx.cur_object,
@@ -374,12 +385,86 @@ fn proc_if() -> fn(&mut AoclaCtx) -> Result {
         };
 
         if state {
-            ctx.eval(if_branch)?;
+            ctx.eval(&if_branch)?;
         } else if let Some(o) = else_branch {
             if !matches!(o.kind, ObjectKind::List(_)) {
                 return Err(error!(ctx.cur_object, "`else` branch must be of type List"));
             }
-            ctx.eval(o)?;
+            ctx.eval(&o)?;
+        }
+        Ok(())
+    }
+}
+
+fn proc_while() -> fn(&mut AoclaCtx) -> Result {
+    |ctx| {
+        let loop_body = ctx.pop_stack()?;
+        if !matches!(loop_body.kind, ObjectKind::List(_)) {
+            return Err(error!(ctx.cur_object, "`while` body must be of type List"));
+        }
+
+        let cond = ctx.pop_stack()?;
+        if !matches!(cond.kind, ObjectKind::List(_)) {
+            return Err(error!(
+                ctx.cur_object,
+                "`while` condition must be of type List, that push Bool value to stack"
+            ));
+        }
+
+        loop {
+            ctx.eval(&cond)?;
+            let ObjectKind::Bool(state) = ctx.pop_stack()?.kind else {
+                return Err(error!(
+                    ctx.cur_object,
+                    "`while` condition must push Bool value to stack"
+                ));
+            };
+            if !state {
+                break;
+            }
+            ctx.eval(&loop_body)?;
+        }
+        Ok(())
+    }
+}
+
+fn proc_get() -> fn(&mut AoclaCtx) -> Result {
+    |ctx| {
+        let ObjectKind::Int(index) = ctx.pop_stack()?.kind else {
+            return Err(error!(
+                ctx.cur_object,
+                "Sequences can be indexed only by object of type Int"
+            ));
+        };
+
+        if index.is_negative() {
+            return Err(error!(
+                ctx.cur_object,
+                "Only numbers that are >= 0 can be used as index for sequences"
+            ));
+        }
+
+        let index = index as usize;
+        let seq = ctx.pop_stack()?.kind;
+
+        match seq {
+            ObjectKind::List(s) | ObjectKind::Tuple(s, _) => ctx.stack.push(
+                s.get(index)
+                    .ok_or(error!(ctx.cur_object, "Out of sequence bounds"))?
+                    .clone(),
+            ),
+            ObjectKind::Str(s) => ctx.stack.push(Object::from(ObjectKind::Str(format!(
+                "{}",
+                s.chars()
+                    .nth(index)
+                    .ok_or(error!(ctx.cur_object, "Out of string bounds"))?
+            )))),
+            _ => {
+                return Err(error!(
+                    ctx.cur_object,
+                    "Only objects of type List, Tuple or Str can be indexed"
+                ))
+            }
         }
         Ok(())
     }
@@ -415,18 +500,17 @@ impl Parser {
     }
 
     fn consume_space(&mut self) {
-        while self.curr().is_whitespace() {
-            if self.curr() == '\n' {
-                self.line += 1;
-            }
-            self.idx += 1;
-        }
-
-        if self.curr() == ';' {
-            while self.curr() != '\n' {
-                if self.idx >= self.src.len() - 1 {
-                    break;
+        loop {
+            while self.curr().is_whitespace() {
+                if self.curr() == '\n' {
+                    self.line += 1;
                 }
+                self.idx += 1;
+            }
+            if self.curr() != ';' {
+                break;
+            }
+            while self.curr() != '\n' {
                 self.idx += 1;
             }
         }
@@ -559,8 +643,6 @@ impl Parser {
             line: self.line,
             column: self.column,
             kind: match self.curr() {
-                c if is_symbol(c) => self.parse_symbol(),
-                lb @ ('(' | '[') => self.parse_sequence(lb)?,
                 '0'..='9' | '-' => self.parse_integer(),
                 '#' => self.parse_boolean()?,
                 '"' => self.parse_string()?,
@@ -575,6 +657,8 @@ impl Parser {
                     }
                 },
                 ')' | ']' => return Err(error!(self.line, self.column, "Sequence never opened")),
+                c if is_symbol(c) => self.parse_symbol(),
+                lb @ ('(' | '[') => self.parse_sequence(lb)?,
                 c => {
                     return Err(error!(
                         self.line,
@@ -616,17 +700,16 @@ where
     };
 
     let mut parser = Parser::new(&buf);
-    let obj = parser.parse_object()?;
-    // dbg!(&obj);
+    let root_obj = parser.parse_object()?;
 
-    let mut ctx = AoclaCtx::new();
-    ctx.eval(obj)?;
+    let mut ctx = AoclaCtx::new()?;
+    ctx.eval(&root_obj)?;
 
     Ok(())
 }
 
-fn repl() {
-    let mut ctx = AoclaCtx::new();
+fn repl() -> Result {
+    let mut ctx = AoclaCtx::new()?;
     loop {
         print!("> ");
         io::stdout().flush().unwrap();
@@ -640,20 +723,28 @@ fn repl() {
                 let mut parser = Parser::new(code);
                 match parser.parse_object() {
                     Ok(root_obj) => {
-                        if let Err(err) = ctx.eval(root_obj) {
-                            println!("{}", err);
+                        if let Err(err) = ctx.eval(&root_obj) {
+                            eprintln!("{}", err);
                         }
                     }
-                    Err(err) => println!("{}", err),
+                    Err(err) => eprintln!("{}", err),
                 }
             }
         }
     }
+    Ok(())
 }
 
 type Result<T = ()> = std::result::Result<T, AoclaError>;
 
-#[inline(always)]
 fn main() {
-    eval_file("examples/fib.aocla").unwrap();
+    let result = if let Some(filename) = env::args().nth(1) {
+        eval_file(filename)
+    } else {
+        repl()
+    };
+
+    if let Err(err) = result {
+        eprintln!("{}", err);
+    }
 }
