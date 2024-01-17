@@ -131,6 +131,9 @@ impl AoclaCtx {
         self.add_proc("<=", Proc::Rust(compare_proc()));
         self.add_proc(">", Proc::Rust(compare_proc()));
         self.add_proc("<", Proc::Rust(compare_proc()));
+        self.add_proc("and", Proc::Rust(boolean_proc()));
+        self.add_proc("or", Proc::Rust(boolean_proc()));
+        self.add_proc("not", Proc::Rust(boolean_proc()));
         self.add_proc("print", Proc::Rust(print_proc()));
         self.add_proc("println", Proc::Rust(print_proc()));
         self.add_proc("proc", Proc::Rust(proc_proc()));
@@ -300,6 +303,35 @@ fn compare_proc() -> fn(&mut AoclaCtx) -> Result {
                 "<" => ord == Ordering::Less,
                 _ => unreachable!(),
             })));
+        Ok(())
+    }
+}
+
+fn boolean_proc() -> fn(&mut AoclaCtx) -> Result {
+    |ctx| {
+        let is_unary_op = ctx.cur_proc_name.as_deref().is_some_and(|s| s == "not");
+        
+        if is_unary_op {
+            let obj = ctx.pop_stack()?;
+            let ObjectKind::Bool(val) = obj.kind else {
+                return Err(error!(ctx.cur_object, "Expected object of type Bool"));
+            };
+            ctx.stack.push(Object::from(ObjectKind::Bool(!val)));
+        } else {
+            let rigth_obj = ctx.pop_stack()?;
+            let left_obj = ctx.pop_stack()?;
+            let (ObjectKind::Bool(left), ObjectKind::Bool(right)) = (left_obj.kind, rigth_obj.kind)
+            else {
+                return Err(error!(ctx.cur_object, "Both objects must be of type Bool"));
+            };
+            ctx.stack.push(Object::from(ObjectKind::Bool(
+                match ctx.cur_proc_name.as_deref().unwrap() {
+                    "and" => left && right,
+                    "or" => left || right,
+                    _ => unreachable!(),
+                },
+            )));
+        }
         Ok(())
     }
 }
@@ -671,21 +703,13 @@ impl Parser {
     }
 }
 
+#[rustfmt::skip]
 fn is_symbol(c: char) -> bool {
-    matches!(c, 'a'..='z'
-    | 'A'..='Z'
-    | '@'
-    | '$'
-    | '+'
-    | '-'
-    | '*'
-    | '='
-    | '?'
-    | '%'
-    | '>'
-    | '<'
-    | '_'
-    )
+    matches!(c,
+        'a'..='z' | 'A'..='Z' | '_' |
+        '@' | '$' | '+' | '-' | '*' |
+        '/' | '=' | '?' | '!' | '%' |
+        '>' | '<' | '&' | '|' | '~')
 }
 
 fn eval_file<P>(filename: P) -> Result
