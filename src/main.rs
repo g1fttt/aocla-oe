@@ -141,6 +141,7 @@ impl AoclaCtx {
         self.add_proc("ifelse", Proc::Rust(proc_if()));
         self.add_proc("while", Proc::Rust(proc_while()));
         self.add_proc("get", Proc::Rust(proc_get()));
+        self.add_proc("len", Proc::Rust(proc_len()));
         self.add_proc_string("dup", "(x) $x $x")?;
         self.add_proc_string("swap", "(x y) $y $x")?;
         self.add_proc_string("drop", "(_)")?;
@@ -310,7 +311,7 @@ fn compare_proc() -> fn(&mut AoclaCtx) -> Result {
 fn boolean_proc() -> fn(&mut AoclaCtx) -> Result {
     |ctx| {
         let is_unary_op = ctx.cur_proc_name.as_deref().is_some_and(|s| s == "not");
-        
+
         if is_unary_op {
             let obj = ctx.pop_stack()?;
             let ObjectKind::Bool(val) = obj.kind else {
@@ -495,6 +496,27 @@ fn proc_get() -> fn(&mut AoclaCtx) -> Result {
                 return Err(error!(
                     ctx.cur_object,
                     "Only objects of type List, Tuple or Str can be indexed"
+                ))
+            }
+        }
+        Ok(())
+    }
+}
+
+fn proc_len() -> fn(&mut AoclaCtx) -> Result {
+    |ctx| {
+        let seq = ctx.pop_stack()?.kind;
+        match seq {
+            ObjectKind::List(s) | ObjectKind::Tuple(s, _) => ctx
+                .stack
+                .push(Object::from(ObjectKind::Int(s.len() as isize))),
+            ObjectKind::Str(s) => ctx
+                .stack
+                .push(Object::from(ObjectKind::Int(s.len() as isize))),
+            _ => {
+                return Err(error!(
+                    ctx.cur_object,
+                    "Only objects of type List, Tuple or Str can have length"
                 ))
             }
         }
