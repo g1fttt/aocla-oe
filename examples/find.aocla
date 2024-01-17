@@ -1,0 +1,16 @@
+[(a n)
+  0 #f (i found)
+  [$found not $i $a len < and] [
+    [$n $a $i get =] [ ; We found!!!
+      #t (found)
+    ] [
+      $i 1 + (i)
+    ] ifelse
+  ] while
+  $i
+] 'find proc
+
+[1 2 3 1234 5 6 7 1000] (a)
+
+$a 1234 find println
+$a 1000 find println
