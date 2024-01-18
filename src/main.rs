@@ -81,28 +81,32 @@ impl AoclaCtx {
         self.proc.insert(name.to_owned(), proc);
     }
 
+    fn add_rust_proc(&mut self, name: &str, f: fn(&mut Self) -> Result) {
+        self.add_proc(name, Proc::Rust(f));
+    }
+
     fn load_library(&mut self) -> Result {
-        self.add_proc("+", Proc::Rust(arithmetic_proc()));
-        self.add_proc("-", Proc::Rust(arithmetic_proc()));
-        self.add_proc("*", Proc::Rust(arithmetic_proc()));
-        self.add_proc("/", Proc::Rust(arithmetic_proc()));
-        self.add_proc("=", Proc::Rust(compare_proc()));
-        self.add_proc("<>", Proc::Rust(compare_proc()));
-        self.add_proc(">=", Proc::Rust(compare_proc()));
-        self.add_proc("<=", Proc::Rust(compare_proc()));
-        self.add_proc(">", Proc::Rust(compare_proc()));
-        self.add_proc("<", Proc::Rust(compare_proc()));
-        self.add_proc("and", Proc::Rust(boolean_proc()));
-        self.add_proc("or", Proc::Rust(boolean_proc()));
-        self.add_proc("not", Proc::Rust(boolean_proc()));
-        self.add_proc("print", Proc::Rust(print_proc()));
-        self.add_proc("println", Proc::Rust(print_proc()));
-        self.add_proc("proc", Proc::Rust(proc_proc()));
-        self.add_proc("if", Proc::Rust(proc_if()));
-        self.add_proc("ifelse", Proc::Rust(proc_if()));
-        self.add_proc("while", Proc::Rust(proc_while()));
-        self.add_proc("get", Proc::Rust(proc_get()));
-        self.add_proc("len", Proc::Rust(proc_len()));
+        self.add_rust_proc("+", arithmetic_proc());
+        self.add_rust_proc("-", arithmetic_proc());
+        self.add_rust_proc("*", arithmetic_proc());
+        self.add_rust_proc("/", arithmetic_proc());
+        self.add_rust_proc("=", compare_proc());
+        self.add_rust_proc("<>", compare_proc());
+        self.add_rust_proc(">=", compare_proc());
+        self.add_rust_proc("<=", compare_proc());
+        self.add_rust_proc(">", compare_proc());
+        self.add_rust_proc("<", compare_proc());
+        self.add_rust_proc("and", boolean_proc());
+        self.add_rust_proc("or", boolean_proc());
+        self.add_rust_proc("not", boolean_proc());
+        self.add_rust_proc("print", print_proc());
+        self.add_rust_proc("println", print_proc());
+        self.add_rust_proc("proc", proc_proc());
+        self.add_rust_proc("if", proc_if());
+        self.add_rust_proc("ifelse", proc_if());
+        self.add_rust_proc("while", proc_while());
+        self.add_rust_proc("get", proc_get());
+        self.add_rust_proc("len", proc_len());
         self.add_proc_string("dup", "(x) $x $x")?;
         self.add_proc_string("swap", "(x y) $y $x")?;
         self.add_proc_string("drop", "(_)")?;
