@@ -62,16 +62,21 @@ impl AoclaCtx {
         self.stack.last().ok_or(error!("Out of stack"))
     }
 
+    fn cur_proc_name(&self) -> Result<&str> {
+        self.cur_proc_name
+            .as_deref()
+            .ok_or(error!("Not inside procedure"))
+    }
+
     fn add_proc_string(&mut self, proc_name: &str, proc_body: &str) -> Result {
         let proc_body = parser::wrap(proc_body);
-        let proc = parser::parse_root(&proc_body).unwrap().1; // FIXME: `.unwrap`
-
+        let proc = parser::parse_root(&proc_body)
+            .map_err(|err| error!(err.to_string()))?
+            .1;
         self.add_proc(proc_name, Proc::Aocla(proc));
-
         Ok(())
     }
 
-    #[inline]
     fn add_proc(&mut self, name: &str, proc: Proc) {
         self.proc.insert(name.to_owned(), proc);
     }
@@ -147,14 +152,13 @@ impl AoclaCtx {
 
     fn eval_symbol(&mut self, sym: &String) -> Result {
         if let Some(sym) = sym.strip_prefix('$') {
-            let Some(local) = self.frame.get(sym) else {
-                return Err(error!("Unbound local variable"));
-            };
+            let local = self
+                .frame
+                .get(sym)
+                .ok_or(error!("Unbound local variable"))?;
             self.stack.push(local.clone());
         } else {
-            let Some(proc) = self.proc.get(sym) else {
-                return Err(error!("Unbound procedure"));
-            };
+            let proc = self.proc.get(sym).ok_or(error!("Unbound procedure"))?;
             match proc {
                 Proc::Rust(f) => self.call_proc(sym.clone(), *f)?,
                 Proc::Aocla(o) => self.call_aocla_proc(sym.clone(), o.clone())?,
@@ -204,14 +208,13 @@ fn arithmetic_proc() -> fn(&mut AoclaCtx) -> Result {
             return Err(error!("Both objects must be of type Int"));
         };
 
-        ctx.stack
-            .push(Object::Int(match ctx.cur_proc_name.as_deref().unwrap() {
-                "+" => a + b,
-                "-" => a - b,
-                "*" => a * b,
-                "/" => a / b,
-                _ => unreachable!(),
-            }));
+        ctx.stack.push(Object::Int(match ctx.cur_proc_name()? {
+            "+" => a + b,
+            "-" => a - b,
+            "*" => a * b,
+            "/" => a / b,
+            _ => unreachable!(),
+        }));
         Ok(())
     }
 }
@@ -239,8 +242,7 @@ fn compare_proc() -> fn(&mut AoclaCtx) -> Result {
             }
         };
 
-        let cur_proc_name = ctx.cur_proc_name.as_deref().unwrap();
-        ctx.stack.push(Object::Bool(match cur_proc_name {
+        ctx.stack.push(Object::Bool(match ctx.cur_proc_name()? {
             "=" => ord == Ordering::Equal,
             "<>" => ord != Ordering::Equal,
             ">=" => ord == Ordering::Equal || ord == Ordering::Greater,
@@ -255,26 +257,25 @@ fn compare_proc() -> fn(&mut AoclaCtx) -> Result {
 
 fn boolean_proc() -> fn(&mut AoclaCtx) -> Result {
     |ctx| {
-        let is_unary_op = ctx.cur_proc_name.as_deref().is_some_and(|s| s == "not");
+        let is_unary_op = ctx.cur_proc_name().is_ok_and(|s| s == "not");
 
         if is_unary_op {
-            let obj = ctx.pop_stack()?;
-            let Object::Bool(val) = obj else {
+            if let Object::Bool(b) = ctx.pop_stack()? {
+                ctx.stack.push(Object::Bool(!b));
+            } else {
                 return Err(error!("Expected object of type Bool"));
-            };
-            ctx.stack.push(Object::Bool(!val));
+            }
         } else {
             let rigth_obj = ctx.pop_stack()?;
             let left_obj = ctx.pop_stack()?;
             let (Object::Bool(left), Object::Bool(right)) = (left_obj, rigth_obj) else {
                 return Err(error!("Both objects must be of type Bool"));
             };
-            ctx.stack
-                .push(Object::Bool(match ctx.cur_proc_name.as_deref().unwrap() {
-                    "and" => left && right,
-                    "or" => left || right,
-                    _ => unreachable!(),
-                }));
+            ctx.stack.push(Object::Bool(match ctx.cur_proc_name()? {
+                "and" => left && right,
+                "or" => left || right,
+                _ => unreachable!(),
+            }));
         }
         Ok(())
     }
@@ -282,10 +283,8 @@ fn boolean_proc() -> fn(&mut AoclaCtx) -> Result {
 
 fn print_proc() -> fn(&mut AoclaCtx) -> Result {
     |ctx| {
-        let obj = ctx.peek_stack()?;
-
         use Object::*;
-        match &obj {
+        match ctx.peek_stack()? {
             Int(i) => print!("{}", i),
             List(v) => print!("{:?}", v), // TODO: Pretty print
             Tuple(t, _) => print!("{:?}", t),
@@ -294,15 +293,14 @@ fn print_proc() -> fn(&mut AoclaCtx) -> Result {
             Sym(s, _) => print!("{}", s),
         }
 
-        let should_print_nl = ctx
-            .cur_proc_name
-            .as_ref()
-            .is_some_and(|s| s.as_str() == "println");
+        let should_print_nl = ctx.cur_proc_name().is_ok_and(|s| s == "println");
 
         if should_print_nl {
             println!();
         } else {
-            io::stdout().flush().unwrap();
+            io::stdout()
+                .flush()
+                .map_err(|err| error!(err.to_string()))?;
         }
         Ok(())
     }
@@ -310,20 +308,20 @@ fn print_proc() -> fn(&mut AoclaCtx) -> Result {
 
 fn proc_proc() -> fn(&mut AoclaCtx) -> Result {
     |ctx| {
-        let Object::Sym(name, _) = ctx.pop_stack()? else {
+        let Object::Sym(proc_name, _) = ctx.pop_stack()? else {
             return Err(error!(
                 "The object naming the procedure must be of type Symbol"
             ));
         };
 
-        let body = ctx.pop_stack()?;
-        if !matches!(body, Object::List(_)) {
+        let proc_body = ctx.pop_stack()?;
+        if !matches!(proc_body, Object::List(_)) {
             return Err(error!(
                 "The object representing the body of the procedure must be of type List"
             ));
         }
 
-        ctx.add_proc(&name, Proc::Aocla(body));
+        ctx.add_proc(&proc_name, Proc::Aocla(proc_body));
 
         Ok(())
     }
@@ -331,8 +329,7 @@ fn proc_proc() -> fn(&mut AoclaCtx) -> Result {
 
 fn proc_if() -> fn(&mut AoclaCtx) -> Result {
     |ctx| {
-        let cur_proc_name = ctx.cur_proc_name.as_deref();
-        let else_branch = if cur_proc_name.is_some_and(|s| s == "ifelse") {
+        let else_branch = if ctx.cur_proc_name().is_ok_and(|s| s == "ifelse") {
             Some(ctx.pop_stack()?)
         } else {
             None
@@ -374,15 +371,15 @@ fn proc_while() -> fn(&mut AoclaCtx) -> Result {
             return Err(error!("`while` body must be of type List"));
         }
 
-        let cond = ctx.pop_stack()?;
-        if !matches!(cond, Object::List(_)) {
+        let loop_cond = ctx.pop_stack()?;
+        if !matches!(loop_cond, Object::List(_)) {
             return Err(error!(
                 "`while` condition must be of type List, that push Bool value to stack"
             ));
         }
 
         loop {
-            ctx.eval(&cond)?;
+            ctx.eval(&loop_cond)?;
             let Object::Bool(state) = ctx.pop_stack()? else {
                 return Err(error!("`while` condition must push Bool value to stack"));
             };
@@ -410,9 +407,8 @@ fn proc_get() -> fn(&mut AoclaCtx) -> Result {
         }
 
         let index = index as usize;
-        let seq = ctx.pop_stack()?;
 
-        match seq {
+        match ctx.pop_stack()? {
             Object::List(s) | Object::Tuple(s, _) => ctx.stack.push(
                 s.get(index)
                     .ok_or(error!("Out of sequence bounds"))?
@@ -460,7 +456,9 @@ where
     };
 
     let buf = parser::wrap(&buf);
-    let root_obj = parser::parse_root(&buf).unwrap().1; // FIXME: `.unwrap()`
+    let root_obj = parser::parse_root(&buf)
+        .map_err(|err| error!(err.to_string()))?
+        .1;
 
     let mut ctx = AoclaCtx::new()?;
     ctx.eval(&root_obj)?;
@@ -472,13 +470,17 @@ fn repl() -> Result {
     let mut ctx = AoclaCtx::new()?;
     loop {
         print!("> ");
-        io::stdout().flush().unwrap();
+        io::stdout()
+            .flush()
+            .map_err(|err| error!(err.to_string()))?;
 
         let mut buf = String::new();
-        io::stdin().read_line(&mut buf).unwrap();
+        io::stdin()
+            .read_line(&mut buf)
+            .map_err(|err| error!(err.to_string()))?;
 
         match buf.trim() {
-            "quit" | "exit" | "leave" => break,
+            "quit" => break,
             code => {
                 let code = parser::wrap(code);
                 match parser::parse_root(&code) {
