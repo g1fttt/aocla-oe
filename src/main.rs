@@ -66,6 +66,10 @@ impl AoclaCtx {
         self.stack.last().ok_or(error!("Out of stack"))
     }
 
+    fn peek_stack_mut(&mut self) -> Result<&mut Object> {
+        self.stack.last_mut().ok_or(error!("Out of stack"))
+    }
+
     fn cur_proc_name(&self) -> Result<&str> {
         self.cur_proc_name
             .as_deref()
@@ -107,6 +111,7 @@ impl AoclaCtx {
         self.add_rust_proc("ifelse", proc_if);
         self.add_rust_proc("while", proc_while);
         self.add_rust_proc("get", proc_get);
+        self.add_rust_proc("set", proc_set);
         self.add_rust_proc("len", proc_len);
         self.add_string_proc("dup", "(x) $x $x")?;
         self.add_string_proc("swap", "(x y) $y $x")?;
@@ -407,6 +412,63 @@ fn proc_get(ctx: &mut AoclaCtx) -> Result {
             "{}",
             s.chars().nth(index).ok_or(error!("Out of string bounds"))?
         ))),
+        _ => {
+            return Err(error!(
+                "Only objects of type List, Tuple or Str can be indexed"
+            ))
+        }
+    }
+    Ok(())
+}
+
+#[rustfmt::skip]
+fn proc_set(ctx: &mut AoclaCtx) -> Result {
+    let Object::Int(index) = ctx.pop_stack()? else {
+        return Err(error!(
+            "Sequences can be indexed only by object of type Int"
+        ));
+    };
+
+    if index.is_negative() {
+        return Err(error!(
+            "Only numbers that are >= 0 can be used as index for sequences"
+        ));
+    }
+
+    let index = index as usize;
+    let item_obj = ctx.pop_stack()?;
+    let obj = ctx.peek_stack_mut()?;
+
+    match obj {
+        Object::List(ref mut s) | Object::Tuple(ref mut s, _) => {
+            let item_ref = s
+                .get_mut(index)
+                .ok_or(error!("Out of sequence bounds"))?;
+            *item_ref = item_obj;
+        }
+        Object::Str(ref mut s) => {
+            let Object::Str(items) = item_obj else {
+                return Err(error!(
+                    "Only object of type Str can be used to set another object of type Str"
+                ));
+            };
+
+            if index >= s.chars().count() {
+                return Err(error!("Out of string bounds"));
+            }
+
+            let mut new_s = String::with_capacity(s.len() - 1 + items.len());
+
+            s.chars()
+                .take(index)
+                .for_each(|c| new_s.push(c));
+            new_s.push_str(&items);
+            s.chars()
+                .skip(new_s.chars().count())
+                .for_each(|c| new_s.push(c));
+
+            *s = new_s;
+        }
         _ => {
             return Err(error!(
                 "Only objects of type List, Tuple or Str can be indexed"
