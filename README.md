@@ -14,6 +14,8 @@ Aocla is a quite simple language. Current implementation has 6 datatype:
 
 ## Examples
 
+Example of using `while` and `if` for making some basic algorithms like finding value in list:
+
 ```aocla
 [(a n)
   0 #f (i found)
@@ -32,3 +34,18 @@ Aocla is a quite simple language. Current implementation has 6 datatype:
 $a 1234 find println
 $a 1000 find println
 ```
+
+Other examples can be found in (examples)[examples/] folder
+
+## TODO
+
+Most parts of the original language was implemented but not everything:
+[x] Basic datatypes
+[ ] Every original procedure (unlikely won't happen)
+[ ] Commentaries (they were working, but recently i rewrote whole parser with (nom)[https://github.com/rust-bakery/nom] library and broke them)
+
+What i would like to add:
+[ ] Better-looking REPL (with history and syntax highlighting)
+[ ] Procedures for dealing with lists (push, pop, set, ~~get~~)
+[ ] Procedures for dealing with strings (maybe same set like lists?)
+[ ] C or/and Rust interoperability. Why not?

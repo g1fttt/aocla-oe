@@ -1,4 +1,4 @@
-10 (counter) ; We will iterate 10 times
+10 (counter)
 
 [$counter 0 >] [
   "Loop!" println
