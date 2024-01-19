@@ -72,10 +72,7 @@ impl AoclaCtx {
     }
 
     fn add_proc_string(&mut self, proc_name: &str, proc_body: &str) -> Result {
-        let proc_body = parser::wrap(proc_body);
-        let proc = parser::parse_root(&proc_body)
-            .map_err(|err| error!(err.to_string()))?
-            .1;
+        let proc = parser::parse_root(proc_body).map_err(|err| error!(err))?;
         self.add_proc(proc_name, Proc::Aocla(proc));
         Ok(())
     }
@@ -443,10 +440,7 @@ where
         );
     };
 
-    let buf = parser::wrap(&buf);
-    let root_obj = parser::parse_root(&buf)
-        .map_err(|err| error!(err.to_string()))?
-        .1;
+    let root_obj = parser::parse_root(&buf).map_err(|err| error!(err))?;
 
     let mut ctx = AoclaCtx::new()?;
     ctx.eval(&root_obj)?;
@@ -469,17 +463,14 @@ fn repl() -> Result {
 
         match buf.trim() {
             "quit" => break,
-            code => {
-                let code = parser::wrap(code);
-                match parser::parse_root(&code) {
-                    Ok((_, root_obj)) => {
-                        if let Err(err) = ctx.eval(&root_obj) {
-                            eprintln!("{}", err);
-                        }
+            code => match parser::parse_root(code) {
+                Ok(root_obj) => {
+                    if let Err(err) = ctx.eval(&root_obj) {
+                        eprintln!("{}", err);
                     }
-                    Err(err) => eprintln!("{}", err),
                 }
-            }
+                Err(err) => eprintln!("{}", err),
+            },
         }
     }
     Ok(())

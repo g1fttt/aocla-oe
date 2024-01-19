@@ -7,13 +7,10 @@ use nom::multi::{fold_many0, separated_list0};
 use nom::sequence::{delimited, pair, preceded};
 use nom::{IResult, InputTakeAtPosition, Parser};
 
-pub fn wrap(buf: &str) -> String {
-    format!("[{}]", buf)
-}
-
-pub fn parse_root(i: &str) -> IResult<&str, Object> {
-    let (s, v) = whitesp(parse_list).parse(i)?;
-    Ok((s, Object::List(v)))
+pub fn parse_root(i: &str) -> Result<Object, String> {
+    let s = format!("[{}]", i);
+    let (_, v) = parse_list(&s).map_err(|err| err.to_string())?;
+    Ok(Object::List(v))
 }
 
 fn parse_object(i: &str) -> IResult<&str, Object> {
