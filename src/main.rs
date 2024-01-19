@@ -56,12 +56,16 @@ impl AoclaCtx {
         Ok(ctx)
     }
 
+    fn check_boundaries<T>(x: Option<T>) -> Result<T> {
+        x.ok_or(error!("Out of stack"))
+    }
+
     fn pop_stack(&mut self) -> Result<Object> {
-        self.stack.pop().ok_or(error!("Out of stack"))
+        Self::check_boundaries(self.stack.pop())
     }
 
     fn peek_stack(&self) -> Result<&Object> {
-        self.stack.last().ok_or(error!("Out of stack"))
+        Self::check_boundaries(self.stack.last())
     }
 
     fn cur_proc_name(&self) -> Result<&str> {
