@@ -12,7 +12,7 @@ When you have to use `malloc` along with `free` and keep track of memory allocat
 
 ## Overview
 
-Aocla is a quite simple language. Current implementation has 6 datatype:
+Aocla is a quite simple language. Current implementation has 6 datatypes:
  * List: `[1 2 3 "foo"]`
  * Tuple: `(x y z)`
  * Symbol: `mysymbol`, `=` or `$x`
