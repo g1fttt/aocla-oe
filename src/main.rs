@@ -22,6 +22,7 @@ enum Proc<F: Fn(&mut AoclaCtx) -> Result =
 #[derive(Debug)]
 struct AoclaError {
     message: String,
+    // TODO: Add line and column info
 }
 
 impl fmt::Display for AoclaError {
