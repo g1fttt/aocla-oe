@@ -2,11 +2,15 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::Path;
-use std::{env, error, fmt, fs, io, str};
+use std::{env, fs, io, str};
 
+mod error;
 mod parser;
+mod stack;
 
+use error::*;
 use parser::Object;
+use stack::Stack;
 
 #[rustfmt::skip]
 #[derive(Debug)]
@@ -17,32 +21,9 @@ enum Proc<F: Fn(&mut AoclaCtx) -> Result =
     Rust(F),
 }
 
-#[derive(Debug)]
-struct AoclaError {
-    message: String,
-    // TODO: Add line and column info
-}
-
-impl fmt::Display for AoclaError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "Error occured: {}", self.message)
-    }
-}
-
-impl error::Error for AoclaError {}
-
-#[macro_export]
-macro_rules! error {
-    ($message:expr) => {
-        AoclaError {
-            message: $message.to_owned(),
-        }
-    };
-}
-
 #[derive(Default)]
 struct AoclaCtx {
-    stack: Vec<Object>,
+    stack: Stack,
     proc: HashMap<String, Proc>,
     frame: HashMap<String, Object>,
     cur_proc_name: Option<String>,
@@ -54,18 +35,6 @@ impl AoclaCtx {
         let mut ctx = Self::default();
         ctx.load_library()?;
         Ok(ctx)
-    }
-
-    fn check_boundaries<T>(x: Option<T>) -> Result<T> {
-        x.ok_or(error!("Out of stack"))
-    }
-
-    fn pop_stack(&mut self) -> Result<Object> {
-        Self::check_boundaries(self.stack.pop())
-    }
-
-    fn peek_stack(&self) -> Result<&Object> {
-        Self::check_boundaries(self.stack.last())
     }
 
     fn cur_proc_name(&self) -> Result<&str> {
@@ -151,7 +120,7 @@ impl AoclaCtx {
             let Object::Sym(sym, _) = &obj else {
                 return Err(error!("Only objects of type Symbol can be captured"));
             };
-            let obj = self.pop_stack()?;
+            let obj = self.stack.pop()?;
             self.frame.insert(sym.clone(), obj);
         }
         Ok(())
@@ -207,8 +176,8 @@ impl AoclaCtx {
 }
 
 fn arithmetic_proc(ctx: &mut AoclaCtx) -> Result {
-    let b_obj = ctx.pop_stack()?;
-    let a_obj = ctx.pop_stack()?;
+    let b_obj = ctx.stack.pop()?;
+    let a_obj = ctx.stack.pop()?;
 
     let (Object::Int(b), Object::Int(a)) = (b_obj, a_obj) else {
         return Err(error!("Both objects must be of type Int"));
@@ -225,8 +194,8 @@ fn arithmetic_proc(ctx: &mut AoclaCtx) -> Result {
 }
 
 fn compare_proc(ctx: &mut AoclaCtx) -> Result {
-    let b_obj = ctx.pop_stack()?;
-    let a_obj = ctx.pop_stack()?;
+    let b_obj = ctx.stack.pop()?;
+    let a_obj = ctx.stack.pop()?;
 
     use Object::*;
     let ord = match (&a_obj, &b_obj) {
@@ -240,7 +209,7 @@ fn compare_proc(ctx: &mut AoclaCtx) -> Result {
         | (List(a), Tuple(b, _))
         | (Tuple(b, _), List(a)) => a.len().cmp(&b.len()),
         _ => {
-            ctx.stack.extend_from_slice(&[b_obj, a_obj]);
+            ctx.stack.extend(&[b_obj, a_obj]);
             return Err(error!("Unable to compare two objects"));
         }
     };
@@ -261,14 +230,14 @@ fn boolean_proc(ctx: &mut AoclaCtx) -> Result {
     let is_unary_op = ctx.cur_proc_name().is_ok_and(|s| s == "not");
 
     if is_unary_op {
-        if let Object::Bool(b) = ctx.pop_stack()? {
+        if let Object::Bool(b) = ctx.stack.pop()? {
             ctx.stack.push(Object::Bool(!b));
         } else {
             return Err(error!("Expected object of type Bool"));
         }
     } else {
-        let rigth_obj = ctx.pop_stack()?;
-        let left_obj = ctx.pop_stack()?;
+        let rigth_obj = ctx.stack.pop()?;
+        let left_obj = ctx.stack.pop()?;
         let (Object::Bool(left), Object::Bool(right)) = (left_obj, rigth_obj) else {
             return Err(error!("Both objects must be of type Bool"));
         };
@@ -283,7 +252,7 @@ fn boolean_proc(ctx: &mut AoclaCtx) -> Result {
 
 fn print_proc(ctx: &mut AoclaCtx) -> Result {
     use Object::*;
-    match ctx.peek_stack()? {
+    match ctx.stack.peek()? {
         Int(i) => print!("{}", i),
         List(v) => print!("{:?}", v), // TODO: Pretty print
         Tuple(t, _) => print!("{:?}", t),
@@ -305,13 +274,13 @@ fn print_proc(ctx: &mut AoclaCtx) -> Result {
 }
 
 fn proc_proc(ctx: &mut AoclaCtx) -> Result {
-    let Object::Sym(proc_name, _) = ctx.pop_stack()? else {
+    let Object::Sym(proc_name, _) = ctx.stack.pop()? else {
         return Err(error!(
             "The object naming the procedure must be of type Symbol"
         ));
     };
 
-    let proc_body = ctx.pop_stack()?;
+    let proc_body = ctx.stack.pop()?;
     if !matches!(proc_body, Object::List(_)) {
         return Err(error!(
             "The object representing the body of the procedure must be of type List"
@@ -325,17 +294,17 @@ fn proc_proc(ctx: &mut AoclaCtx) -> Result {
 
 fn proc_if(ctx: &mut AoclaCtx) -> Result {
     let else_branch = if ctx.cur_proc_name().is_ok_and(|s| s == "ifelse") {
-        Some(ctx.pop_stack()?)
+        Some(ctx.stack.pop()?)
     } else {
         None
     };
 
-    let if_branch = ctx.pop_stack()?;
+    let if_branch = ctx.stack.pop()?;
     if !matches!(if_branch, Object::List(_)) {
         return Err(error!("`if` branch must be of type List"));
     }
 
-    let cond = ctx.pop_stack()?;
+    let cond = ctx.stack.pop()?;
     if !matches!(cond, Object::List(_)) {
         return Err(error!(
             "`if` condition must be of type List, that push Bool value to stack"
@@ -343,7 +312,7 @@ fn proc_if(ctx: &mut AoclaCtx) -> Result {
     }
 
     ctx.eval(&cond)?;
-    let Object::Bool(state) = ctx.pop_stack()? else {
+    let Object::Bool(state) = ctx.stack.pop()? else {
         return Err(error!("`if` condition must push Bool value to stack"));
     };
 
@@ -359,12 +328,12 @@ fn proc_if(ctx: &mut AoclaCtx) -> Result {
 }
 
 fn proc_while(ctx: &mut AoclaCtx) -> Result {
-    let loop_body = ctx.pop_stack()?;
+    let loop_body = ctx.stack.pop()?;
     if !matches!(loop_body, Object::List(_)) {
         return Err(error!("`while` body must be of type List"));
     }
 
-    let loop_cond = ctx.pop_stack()?;
+    let loop_cond = ctx.stack.pop()?;
     if !matches!(loop_cond, Object::List(_)) {
         return Err(error!(
             "`while` condition must be of type List, that push Bool value to stack"
@@ -373,7 +342,7 @@ fn proc_while(ctx: &mut AoclaCtx) -> Result {
 
     loop {
         ctx.eval(&loop_cond)?;
-        let Object::Bool(state) = ctx.pop_stack()? else {
+        let Object::Bool(state) = ctx.stack.pop()? else {
             return Err(error!("`while` condition must push Bool value to stack"));
         };
         if !state {
@@ -385,7 +354,7 @@ fn proc_while(ctx: &mut AoclaCtx) -> Result {
 }
 
 fn proc_get(ctx: &mut AoclaCtx) -> Result {
-    let Object::Int(index) = ctx.pop_stack()? else {
+    let Object::Int(index) = ctx.stack.pop()? else {
         return Err(error!(
             "Sequences can be indexed only by object of type Int"
         ));
@@ -399,7 +368,7 @@ fn proc_get(ctx: &mut AoclaCtx) -> Result {
 
     let index = index as usize;
 
-    match ctx.pop_stack()? {
+    match ctx.stack.pop()? {
         Object::List(s) | Object::Tuple(s, _) => ctx.stack.push(
             s.get(index)
                 .ok_or(error!("Out of sequence bounds"))?
@@ -419,7 +388,7 @@ fn proc_get(ctx: &mut AoclaCtx) -> Result {
 }
 
 fn proc_len(ctx: &mut AoclaCtx) -> Result {
-    let seq = ctx.pop_stack()?;
+    let seq = ctx.stack.pop()?;
     match seq {
         Object::List(s) | Object::Tuple(s, _) => ctx.stack.push(Object::Int(s.len() as _)),
         Object::Str(s) => ctx.stack.push(Object::Int(s.len() as _)),
@@ -478,8 +447,6 @@ fn repl() -> Result {
     }
     Ok(())
 }
-
-type Result<T = ()> = std::result::Result<T, AoclaError>;
 
 fn main() {
     let result = if let Some(filename) = env::args().nth(1) {

@@ -49,7 +49,7 @@ Other examples can be found in [examples](examples/) folder
 
 Most parts of the original language was implemented but not everything:
 - [x] Basic datatypes
-- [ ] Every original procedure (unlikely won't happen)
+- [ ] Every original procedure (likely won't happen)
 - [ ] Commentaries (they were working, but recently i rewrote whole parser with [nom](https://github.com/rust-bakery/nom) library and broke them)
 
 What i *would* like to add:
