@@ -2,6 +2,14 @@
 
 Aocla (Advent of Code inspired Language) is a toy stack-based programming language made by [antirez](https://github.com/antirez).
 
+## What's the purpose of this repository?
+
+Well, it is not just another [RIIR](https://transitiontech.ca/random/RIIR), but rather rewrite to higher level language for better expandability.
+
+I love the idea of small languages, the idea of making **anything** you want with just some really basic tools the language gives you.
+**C** is a quite simple language, but its simplicity is sometimes *really* annoying.
+When you have to use `malloc` along with `free` and keep track of memory allocations... It isn't the best tool for daily programming usage.
+
 ## Overview
 
 Aocla is a quite simple language. Current implementation has 6 datatype:
