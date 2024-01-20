@@ -13,7 +13,7 @@ use parser::Object;
 use stack::Stack;
 
 #[rustfmt::skip]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Proc<F: Fn(&mut AoclaCtx) -> Result =
     fn(&mut AoclaCtx) -> Result>
 {
@@ -24,7 +24,7 @@ enum Proc<F: Fn(&mut AoclaCtx) -> Result =
 #[derive(Default)]
 struct AoclaCtx {
     stack: Stack,
-    proc: HashMap<String, Proc>,
+    procs: HashMap<String, Proc>,
     frame: HashMap<String, Object>,
     cur_proc_name: Option<String>,
     cur_object: Option<Object>,
@@ -54,7 +54,7 @@ impl AoclaCtx {
     }
 
     fn add_proc(&mut self, name: &str, proc: Proc) {
-        self.proc.insert(name.to_owned(), proc);
+        self.procs.insert(name.to_owned(), proc);
     }
 
     fn load_library(&mut self) -> Result {
@@ -131,12 +131,20 @@ impl AoclaCtx {
             let local = self
                 .frame
                 .get(sym)
-                .ok_or(error!("Unbound local variable"))?;
+                .ok_or(error!(format!("Unbound local variable: '{sym}'")))?;
             self.stack.push(local.clone());
         } else {
-            let proc = self.proc.get(sym).ok_or(error!("Unbound procedure"))?;
+            let proc = match self.procs.get(sym) {
+                Some(proc) => proc.clone(),
+                None => match self.frame.get(sym) {
+                    Some(local @ Object::Sym(_, _)) => {
+                        Proc::Aocla(Object::List(vec![local.clone()]))
+                    }
+                    Some(_) | None => return Err(error!(format!("Unbound procedure: '{sym}'"))),
+                },
+            };
             match proc {
-                Proc::Rust(f) => self.call_proc(sym.clone(), *f)?,
+                Proc::Rust(f) => self.call_proc(sym.clone(), f)?,
                 Proc::Aocla(o) => self.call_aocla_proc(sym.clone(), o.clone())?,
             }
         }
