@@ -1,7 +1,7 @@
 [(a n)
   0 #f (i found)
   [$found not $i $a len < and] [
-    [$n $a $i get =] [
+    [$n $a $i @ =] [
       #t (found)
     ] [
       $i 1 + (i)

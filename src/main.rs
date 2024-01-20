@@ -79,7 +79,7 @@ impl AoclaCtx {
         self.add_rust_proc("if", proc_if);
         self.add_rust_proc("ifelse", proc_if);
         self.add_rust_proc("while", proc_while);
-        self.add_rust_proc("get", proc_get);
+        self.add_rust_proc("@", proc_get);
         self.add_rust_proc("len", proc_len);
         self.add_rust_proc("eval", proc_eval);
         self.add_string_proc("dup", "(x) $x $x")?;
@@ -264,7 +264,11 @@ fn concat_proc(ctx: &mut AoclaCtx) -> Result {
         (Object::Tuple(a, _), Object::Tuple(b, _)) => Object::Tuple([a, b].concat(), false),
         (Object::List(a), Object::List(b)) => Object::List([a, b].concat()),
         (Object::Str(a), Object::Str(b)) => Object::Str([a, b].concat()),
-        _ => return Err(error!("Both objects must be of the same type (List, Tuple, Str)")),
+        _ => {
+            return Err(error!(
+                "Both objects must be of the same type (List, Tuple, Str)"
+            ))
+        }
     });
 
     Ok(())
