@@ -70,6 +70,7 @@ impl AoclaCtx {
         self.add_rust_proc("<", compare_proc);
         self.add_rust_proc("|", concat_proc);
         self.add_rust_proc("::", proc_cons);
+        self.add_rust_proc("@", proc_get);
         self.add_rust_proc("and", boolean_proc);
         self.add_rust_proc("or", boolean_proc);
         self.add_rust_proc("not", boolean_proc);
@@ -79,7 +80,6 @@ impl AoclaCtx {
         self.add_rust_proc("if", proc_if);
         self.add_rust_proc("ifelse", proc_if);
         self.add_rust_proc("while", proc_while);
-        self.add_rust_proc("get", proc_get);
         self.add_rust_proc("len", proc_len);
         self.add_rust_proc("eval", proc_eval);
         self.add_string_proc("dup", "(x) $x $x")?;
