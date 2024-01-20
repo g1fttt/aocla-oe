@@ -44,7 +44,7 @@ impl AoclaCtx {
     }
 
     fn add_string_proc(&mut self, proc_name: &str, proc_body: &str) -> Result {
-        let proc = parser::parse_root(proc_body).map_err(|err| error!(err))?;
+        let proc = parser::parse_root(proc_body).map_err(string_to_error)?;
         self.add_proc(proc_name, Proc::Aocla(proc));
         Ok(())
     }
@@ -136,7 +136,10 @@ impl AoclaCtx {
                 .ok_or(error!("Unbound local variable"))?;
             self.stack.push(local.clone());
         } else {
-            let proc = self.proc.get(sym).ok_or(error!("Unbound procedure"))?;
+            let proc = self
+                .proc
+                .get(sym)
+                .ok_or(error!("Unbound procedure `{}`", sym))?;
             match proc {
                 Proc::Rust(f) => self.call_proc(sym.clone(), *f)?,
                 Proc::Aocla(o) => self.call_aocla_proc(sym.clone(), o.clone())?,
@@ -276,9 +279,7 @@ fn print_proc(ctx: &mut AoclaCtx) -> Result {
     if should_print_nl {
         println!();
     } else {
-        io::stdout()
-            .flush()
-            .map_err(|err| error!(err.to_string()))?;
+        io::stdout().flush().map_err(to_error)?;
     }
     Ok(())
 }
@@ -457,7 +458,7 @@ where
         );
     };
 
-    let root_obj = parser::parse_root(&buf).map_err(|err| error!(err))?;
+    let root_obj = parser::parse_root(&buf).map_err(string_to_error)?;
 
     let mut ctx = AoclaCtx::new()?;
     ctx.eval(&root_obj)?;
@@ -469,14 +470,10 @@ fn repl() -> Result {
     let mut ctx = AoclaCtx::new()?;
     loop {
         print!("> ");
-        io::stdout()
-            .flush()
-            .map_err(|err| error!(err.to_string()))?;
+        io::stdout().flush().map_err(to_error)?;
 
         let mut buf = String::new();
-        io::stdin()
-            .read_line(&mut buf)
-            .map_err(|err| error!(err.to_string()))?;
+        io::stdin().read_line(&mut buf).map_err(to_error)?;
 
         match buf.trim() {
             "quit" => break,
