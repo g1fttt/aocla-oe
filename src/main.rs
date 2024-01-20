@@ -44,7 +44,7 @@ impl AoclaCtx {
     }
 
     fn add_string_proc(&mut self, proc_name: &str, proc_body: &str) -> Result {
-        let proc = parser::parse_root(proc_body).map_err(|err| error!(err))?;
+        let proc = parser::parse_root(proc_body).map_err(string_to_error)?;
         self.add_proc(proc_name, Proc::Aocla(proc));
         Ok(())
     }
@@ -69,6 +69,7 @@ impl AoclaCtx {
         self.add_rust_proc(">", compare_proc);
         self.add_rust_proc("<", compare_proc);
         self.add_rust_proc("|", concat_proc);
+        self.add_rust_proc("::", proc_cons);
         self.add_rust_proc("and", boolean_proc);
         self.add_rust_proc("or", boolean_proc);
         self.add_rust_proc("not", boolean_proc);
@@ -80,6 +81,7 @@ impl AoclaCtx {
         self.add_rust_proc("while", proc_while);
         self.add_rust_proc("get", proc_get);
         self.add_rust_proc("len", proc_len);
+        self.add_rust_proc("eval", proc_eval);
         self.add_string_proc("dup", "(x) $x $x")?;
         self.add_string_proc("swap", "(x y) $y $x")?;
         self.add_string_proc("drop", "(_)")?;
@@ -132,10 +134,13 @@ impl AoclaCtx {
             let local = self
                 .frame
                 .get(sym)
-                .ok_or(error!("Unbound local variable"))?;
+                .ok_or(error!("Unbound local variable: `{}`", sym))?;
             self.stack.push(local.clone());
         } else {
-            let proc = self.proc.get(sym).ok_or(error!("Unbound procedure"))?;
+            let proc = self
+                .proc
+                .get(sym)
+                .ok_or(error!("Unbound procedure `{}`", sym))?;
             match proc {
                 Proc::Rust(f) => self.call_proc(sym.clone(), *f)?,
                 Proc::Aocla(o) => self.call_aocla_proc(sym.clone(), o.clone())?,
@@ -266,24 +271,30 @@ fn concat_proc(ctx: &mut AoclaCtx) -> Result {
 }
 
 fn print_proc(ctx: &mut AoclaCtx) -> Result {
-    use Object::*;
-    match ctx.stack.peek()? {
-        Int(i) => print!("{}", i),
-        List(v) => print!("{:?}", v), // TODO: Pretty print
-        Tuple(t, _) => print!("{:?}", t),
-        Str(s) => print!("{}", s),
-        Bool(b) => print!("{}", b),
-        Sym(s, _) => print!("{}", s),
+    fn print_object(obj: &Object) {
+        use Object::*;
+        match obj {
+            Int(i) => print!("{}", i),
+            List(s) | Tuple(s, _) => {
+                for o in s {
+                    print_object(o);
+                    print!(" ");
+                }
+            }
+            Str(s) => print!("{}", s),
+            Bool(b) => print!("{}", b),
+            Sym(s, _) => print!("{}", s),
+        }
     }
+
+    print_object(ctx.stack.peek()?);
 
     let should_print_nl = ctx.cur_proc_name().is_ok_and(|s| s == "println");
 
     if should_print_nl {
         println!();
     } else {
-        io::stdout()
-            .flush()
-            .map_err(|err| error!(err.to_string()))?;
+        io::stdout().flush().map_err(to_error)?;
     }
     Ok(())
 }
@@ -377,7 +388,8 @@ fn proc_get(ctx: &mut AoclaCtx) -> Result {
 
     if index.is_negative() {
         return Err(error!(
-            "Only numbers that are >= 0 can be used as index for sequences"
+            "Only numbers that are >= 0 can be used as index for sequences (got {})",
+            index
         ));
     }
 
@@ -416,6 +428,41 @@ fn proc_len(ctx: &mut AoclaCtx) -> Result {
     Ok(())
 }
 
+/// Consumes **List** or **Tuple** from stack and push `head` and `tail` of sequence to stack.
+/// Will return error if `object` on stack is not **List** nor **Tuple**.
+fn proc_cons(ctx: &mut AoclaCtx) -> Result {
+    let seq = ctx.stack.pop()?;
+    match &seq {
+        Object::List(s) | Object::Tuple(s, _) => {
+            let head = s
+                .first()
+                .ok_or(error!("Unable to take head from empty sequence"))?;
+            let tail = s[1..].to_vec();
+
+            ctx.stack.push(head.clone());
+            ctx.stack.push(match seq {
+                Object::List(_) => Object::List(tail),
+                Object::Tuple(_, is_quoted) => Object::Tuple(tail, is_quoted),
+                _ => unreachable!(),
+            });
+        }
+        _ => {
+            return Err(error!(
+                "Only objects of type List or Tuple can use `::` procedure"
+            ))
+        }
+    }
+    Ok(())
+}
+
+fn proc_eval(ctx: &mut AoclaCtx) -> Result {
+    let obj = ctx.stack.pop()?;
+    if !matches!(obj, Object::List(_)) {
+        return Err(error!("Only objects of type List can be evaluated"));
+    }
+    ctx.eval(&obj)
+}
+
 fn eval_file<P>(filename: P) -> Result
 where
     P: AsRef<Path>,
@@ -427,7 +474,7 @@ where
         );
     };
 
-    let root_obj = parser::parse_root(&buf).map_err(|err| error!(err))?;
+    let root_obj = parser::parse_root(&buf).map_err(string_to_error)?;
 
     let mut ctx = AoclaCtx::new()?;
     ctx.eval(&root_obj)?;
@@ -439,14 +486,10 @@ fn repl() -> Result {
     let mut ctx = AoclaCtx::new()?;
     loop {
         print!("> ");
-        io::stdout()
-            .flush()
-            .map_err(|err| error!(err.to_string()))?;
+        io::stdout().flush().map_err(to_error)?;
 
         let mut buf = String::new();
-        io::stdin()
-            .read_line(&mut buf)
-            .map_err(|err| error!(err.to_string()))?;
+        io::stdin().read_line(&mut buf).map_err(to_error)?;
 
         match buf.trim() {
             "quit" => break,
