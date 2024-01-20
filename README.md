@@ -28,7 +28,7 @@ Example of using `while` and `if` for making some basic algorithms like finding 
 [(a n)
   0 #f (i found)
   [$found not $i $a len < and] [
-    [$n $a $i get =] [
+    [$n $a $i @ =] [
       #t (found)
     ] [
       $i 1 + (i)
@@ -54,6 +54,6 @@ Most parts of the original language was implemented but not everything:
 
 What i *would* like to add:
 - [ ] Better-looking REPL (with history and syntax highlighting)
-- [ ] Procedures for dealing with lists (-> (prepend), <- (append), :: (cons), @ (get))
+- [ ] Procedures for dealing with lists (-> (prepend), <- (append), :: (cons), @ (get by index))
 - [ ] Procedures for dealing with strings (maybe same set like lists?)
 - [ ] C or/and Rust interoperability. Why not?
