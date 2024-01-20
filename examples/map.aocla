@@ -1,0 +1,13 @@
+[(a f)
+  0 [] (i r)
+  [$i $a len <] [
+    $r
+    $a $i @
+    $f eval
+    -> (r)
+    $i 1 + (i)
+  ] while
+  $r
+] 'map proc
+
+[1 2 3 4] [2 *] map println

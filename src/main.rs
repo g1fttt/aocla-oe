@@ -58,28 +58,30 @@ impl AoclaCtx {
     }
 
     fn load_library(&mut self) -> Result {
-        self.add_rust_proc("+", arithmetic_proc);
-        self.add_rust_proc("-", arithmetic_proc);
-        self.add_rust_proc("*", arithmetic_proc);
-        self.add_rust_proc("/", arithmetic_proc);
-        self.add_rust_proc("=", compare_proc);
-        self.add_rust_proc("<>", compare_proc);
-        self.add_rust_proc(">=", compare_proc);
-        self.add_rust_proc("<=", compare_proc);
-        self.add_rust_proc(">", compare_proc);
-        self.add_rust_proc("<", compare_proc);
-        self.add_rust_proc("|", concat_proc);
+        self.add_rust_proc("+", proc_arithmetic);
+        self.add_rust_proc("-", proc_arithmetic);
+        self.add_rust_proc("*", proc_arithmetic);
+        self.add_rust_proc("/", proc_arithmetic);
+        self.add_rust_proc("=", proc_compare);
+        self.add_rust_proc("<>", proc_compare);
+        self.add_rust_proc(">=", proc_compare);
+        self.add_rust_proc("<=", proc_compare);
+        self.add_rust_proc(">", proc_compare);
+        self.add_rust_proc("<", proc_compare);
+        self.add_rust_proc("|", proc_concat);
         self.add_rust_proc("::", proc_cons);
-        self.add_rust_proc("and", boolean_proc);
-        self.add_rust_proc("or", boolean_proc);
-        self.add_rust_proc("not", boolean_proc);
+        self.add_rust_proc("@", proc_get);
+        self.add_rust_proc("->", proc_append);
+        self.add_rust_proc("<-", proc_prepend);
+        self.add_rust_proc("and", proc_boolean);
+        self.add_rust_proc("or", proc_boolean);
+        self.add_rust_proc("not", proc_boolean);
         self.add_rust_proc("print", print_proc);
         self.add_rust_proc("println", print_proc);
         self.add_rust_proc("proc", proc_proc);
         self.add_rust_proc("if", proc_if);
         self.add_rust_proc("ifelse", proc_if);
         self.add_rust_proc("while", proc_while);
-        self.add_rust_proc("@", proc_get);
         self.add_rust_proc("len", proc_len);
         self.add_rust_proc("eval", proc_eval);
         self.add_string_proc("dup", "(x) $x $x")?;
@@ -181,7 +183,7 @@ impl AoclaCtx {
     }
 }
 
-fn arithmetic_proc(ctx: &mut AoclaCtx) -> Result {
+fn proc_arithmetic(ctx: &mut AoclaCtx) -> Result {
     let b_obj = ctx.stack.pop()?;
     let a_obj = ctx.stack.pop()?;
 
@@ -199,7 +201,7 @@ fn arithmetic_proc(ctx: &mut AoclaCtx) -> Result {
     Ok(())
 }
 
-fn compare_proc(ctx: &mut AoclaCtx) -> Result {
+fn proc_compare(ctx: &mut AoclaCtx) -> Result {
     let b_obj = ctx.stack.pop()?;
     let a_obj = ctx.stack.pop()?;
 
@@ -232,7 +234,7 @@ fn compare_proc(ctx: &mut AoclaCtx) -> Result {
     Ok(())
 }
 
-fn boolean_proc(ctx: &mut AoclaCtx) -> Result {
+fn proc_boolean(ctx: &mut AoclaCtx) -> Result {
     let is_unary_op = ctx.cur_proc_name().is_ok_and(|s| s == "not");
 
     if is_unary_op {
@@ -256,7 +258,7 @@ fn boolean_proc(ctx: &mut AoclaCtx) -> Result {
     Ok(())
 }
 
-fn concat_proc(ctx: &mut AoclaCtx) -> Result {
+fn proc_concat(ctx: &mut AoclaCtx) -> Result {
     let b_obj = ctx.stack.pop()?;
     let a_obj = ctx.stack.pop()?;
 
@@ -266,11 +268,10 @@ fn concat_proc(ctx: &mut AoclaCtx) -> Result {
         (Object::Str(a), Object::Str(b)) => Object::Str([a, b].concat()),
         _ => {
             return Err(error!(
-                "Both objects must be of the same type (List, Tuple, Str)"
+                "Only objects of type List, Tuple or Str can be concatenated"
             ))
         }
     });
-
     Ok(())
 }
 
@@ -415,6 +416,32 @@ fn proc_get(ctx: &mut AoclaCtx) -> Result {
             ))
         }
     }
+    Ok(())
+}
+
+fn proc_append(ctx: &mut AoclaCtx) -> Result {
+    let b_obj = ctx.stack.pop()?;
+    let a_obj = ctx.stack.peek_mut()?;
+
+    let (Object::List(a), b) = (a_obj, b_obj) else {
+        return Err(error!("Only objects of type List can use `->` procedure"));
+    };
+
+    a.push(b);
+
+    Ok(())
+}
+
+fn proc_prepend(ctx: &mut AoclaCtx) -> Result {
+    let b_obj = ctx.stack.pop()?;
+    let a_obj = ctx.stack.peek_mut()?;
+
+    let (Object::List(a), b) = (a_obj, b_obj) else {
+        return Err(error!("Only objects of type List can use `<-` procedure"));
+    };
+
+    a.insert(0, b);
+
     Ok(())
 }
 

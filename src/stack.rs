@@ -21,6 +21,10 @@ impl Stack {
         check_boundaries(self.0.last())
     }
 
+    pub fn peek_mut(&mut self) -> Result<&mut Object> {
+        check_boundaries(self.0.last_mut())
+    }
+
     pub fn len(&self) -> usize {
         self.0.len()
     }
