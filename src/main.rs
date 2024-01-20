@@ -263,7 +263,9 @@ fn proc_concat(ctx: &mut AoclaCtx) -> Result {
     let a_obj = ctx.stack.pop()?;
 
     ctx.stack.push(match (a_obj, b_obj) {
-        (Object::Tuple(a, _), Object::Tuple(b, _)) => Object::Tuple([a, b].concat(), false),
+        (Object::Tuple(a, is_quoted), Object::Tuple(b, _)) => {
+            Object::Tuple([a, b].concat(), is_quoted)
+        }
         (Object::List(a), Object::List(b)) => Object::List([a, b].concat()),
         (Object::Str(a), Object::Str(b)) => Object::Str([a, b].concat()),
         _ => {
