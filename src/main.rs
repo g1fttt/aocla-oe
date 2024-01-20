@@ -133,7 +133,7 @@ impl AoclaCtx {
             let local = self
                 .frame
                 .get(sym)
-                .ok_or(error!("Unbound local variable"))?;
+                .ok_or(error!("Unbound local variable: `{}`", sym))?;
             self.stack.push(local.clone());
         } else {
             let proc = self
@@ -373,7 +373,8 @@ fn proc_get(ctx: &mut AoclaCtx) -> Result {
 
     if index.is_negative() {
         return Err(error!(
-            "Only numbers that are >= 0 can be used as index for sequences"
+            "Only numbers that are >= 0 can be used as index for sequences (got {})",
+            index
         ));
     }
 
