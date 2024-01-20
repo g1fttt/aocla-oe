@@ -413,7 +413,6 @@ fn proc_len(ctx: &mut AoclaCtx) -> Result {
 
 /// Consumes **List** or **Tuple** from stack and push `head` and `tail` of sequence to stack.
 /// Will return error if `object` on stack is not **List** nor **Tuple**.
-/// If sequence on stack of len 1 then it will not push `tail` at all, but only `head`.
 fn proc_cons(ctx: &mut AoclaCtx) -> Result {
     let seq = ctx.stack.pop()?;
     match &seq {
@@ -424,13 +423,11 @@ fn proc_cons(ctx: &mut AoclaCtx) -> Result {
             let tail = s[1..].to_vec();
 
             ctx.stack.push(head.clone());
-            if !tail.is_empty() {
-                ctx.stack.push(match seq {
-                    Object::List(_) => Object::List(tail),
-                    Object::Tuple(_, is_quoted) => Object::Tuple(tail, is_quoted),
-                    _ => unreachable!(),
-                });
-            }
+            ctx.stack.push(match seq {
+                Object::List(_) => Object::List(tail),
+                Object::Tuple(_, is_quoted) => Object::Tuple(tail, is_quoted),
+                _ => unreachable!(),
+            });
         }
         _ => {
             return Err(error!(
