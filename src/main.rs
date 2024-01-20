@@ -68,7 +68,7 @@ impl AoclaCtx {
         self.add_rust_proc("<=", compare_proc);
         self.add_rust_proc(">", compare_proc);
         self.add_rust_proc("<", compare_proc);
-        self.add_rust_proc("@", concat_proc);
+        self.add_rust_proc("|", concat_proc);
         self.add_rust_proc("and", boolean_proc);
         self.add_rust_proc("or", boolean_proc);
         self.add_rust_proc("not", boolean_proc);
@@ -255,17 +255,15 @@ fn concat_proc(ctx: &mut AoclaCtx) -> Result {
     let b_obj = ctx.stack.pop()?;
     let a_obj = ctx.stack.pop()?;
 
-    ctx.stack.push(match a_obj {
-        Object::List(mut s) => {
-            s.push(b_obj);
-            Object::List(s)
-        }
-        _ => return Err(error!("Only objects of type List can be concatenated")),
+    ctx.stack.push(match (a_obj, b_obj) {
+        (Object::Tuple(a, _), Object::Tuple(b, _)) => Object::Tuple([a, b].concat(), false),
+        (Object::List(a), Object::List(b)) => Object::List([a, b].concat()),
+        (Object::Str(a), Object::Str(b)) => Object::Str([a, b].concat()),
+        _ => return Err(error!("Both objects must be of the same type (List, Tuple, Str)")),
     });
 
     Ok(())
 }
-
 
 fn print_proc(ctx: &mut AoclaCtx) -> Result {
     use Object::*;
