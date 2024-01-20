@@ -72,7 +72,7 @@ fn parse_sym(i: &str) -> IResult<&str, (String, bool)> {
 }
 
 fn is_sym(i: &str) -> IResult<&str, &str> {
-    const SYMBOLS: &str = "_@$+-*/=?!%><&|~";
+    const SYMBOLS: &str = "_@$+-*/=?!%><&|~:";
     i.split_at_position1_complete(
         |c| !c.is_alphanumeric() && !SYMBOLS.contains(c),
         ErrorKind::IsA,

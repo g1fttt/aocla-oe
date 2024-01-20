@@ -68,6 +68,7 @@ impl AoclaCtx {
         self.add_rust_proc("<=", compare_proc);
         self.add_rust_proc(">", compare_proc);
         self.add_rust_proc("<", compare_proc);
+        self.add_rust_proc("::", proc_cons);
         self.add_rust_proc("and", boolean_proc);
         self.add_rust_proc("or", boolean_proc);
         self.add_rust_proc("not", boolean_proc);
@@ -79,6 +80,7 @@ impl AoclaCtx {
         self.add_rust_proc("while", proc_while);
         self.add_rust_proc("get", proc_get);
         self.add_rust_proc("len", proc_len);
+        self.add_rust_proc("eval", proc_eval);
         self.add_string_proc("dup", "(x) $x $x")?;
         self.add_string_proc("swap", "(x y) $y $x")?;
         self.add_string_proc("drop", "(_)")?;
@@ -251,15 +253,23 @@ fn boolean_proc(ctx: &mut AoclaCtx) -> Result {
 }
 
 fn print_proc(ctx: &mut AoclaCtx) -> Result {
-    use Object::*;
-    match ctx.stack.peek()? {
-        Int(i) => print!("{}", i),
-        List(v) => print!("{:?}", v), // TODO: Pretty print
-        Tuple(t, _) => print!("{:?}", t),
-        Str(s) => print!("{}", s),
-        Bool(b) => print!("{}", b),
-        Sym(s, _) => print!("{}", s),
+    fn print_object(obj: &Object) {
+        use Object::*;
+        match obj {
+            Int(i) => print!("{}", i),
+            List(s) | Tuple(s, _) => {
+                for o in s {
+                    print_object(o);
+                    print!(" ");
+                }
+            }
+            Str(s) => print!("{}", s),
+            Bool(b) => print!("{}", b),
+            Sym(s, _) => print!("{}", s),
+        }
     }
+
+    print_object(ctx.stack.peek()?);
 
     let should_print_nl = ctx.cur_proc_name().is_ok_and(|s| s == "println");
 
@@ -399,6 +409,44 @@ fn proc_len(ctx: &mut AoclaCtx) -> Result {
         }
     }
     Ok(())
+}
+
+/// Consumes **List** or **Tuple** from stack and push `head` and `tail` of sequence to stack.
+/// Will return error if `object` on stack is not **List** nor **Tuple**.
+/// If sequence on stack of len 1 then it will not push `tail` at all, but only `head`.
+fn proc_cons(ctx: &mut AoclaCtx) -> Result {
+    let seq = ctx.stack.pop()?;
+    match &seq {
+        Object::List(s) | Object::Tuple(s, _) => {
+            let head = s
+                .first()
+                .ok_or(error!("Unable to take head from empty sequence"))?;
+            let tail = s[1..].to_vec();
+
+            ctx.stack.push(head.clone());
+            if !tail.is_empty() {
+                ctx.stack.push(match seq {
+                    Object::List(_) => Object::List(tail),
+                    Object::Tuple(_, is_quoted) => Object::Tuple(tail, is_quoted),
+                    _ => unreachable!(),
+                });
+            }
+        }
+        _ => {
+            return Err(error!(
+                "Only objects of type List or Tuple can use `::` procedure"
+            ))
+        }
+    }
+    Ok(())
+}
+
+fn proc_eval(ctx: &mut AoclaCtx) -> Result {
+    let obj = ctx.stack.pop()?;
+    if !matches!(obj, Object::List(_)) {
+        return Err(error!("Only objects of type List can be evaluated"));
+    }
+    ctx.eval(&obj)
 }
 
 fn eval_file<P>(filename: P) -> Result

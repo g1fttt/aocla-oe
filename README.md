@@ -54,6 +54,6 @@ Most parts of the original language was implemented but not everything:
 
 What i *would* like to add:
 - [ ] Better-looking REPL (with history and syntax highlighting)
-- [ ] Procedures for dealing with lists (push, pop, set, ~~get~~)
+- [ ] Procedures for dealing with lists (-> (prepend), <- (append), :: (cons), @ (get))
 - [ ] Procedures for dealing with strings (maybe same set like lists?)
 - [ ] C or/and Rust interoperability. Why not?
