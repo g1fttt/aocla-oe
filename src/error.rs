@@ -34,7 +34,7 @@ pub fn string_to_error(err: String) -> AoclaError {
 }
 
 pub fn to_error(err: impl Error) -> AoclaError {
-    error!("{}", err.to_string())
+    error!("{}", err)
 }
 
 pub type Result<T = ()> = std::result::Result<T, AoclaError>;
