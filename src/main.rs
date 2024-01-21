@@ -90,7 +90,11 @@ impl AoclaCtx {
         Ok(())
     }
 
-    fn call_proc(&mut self, proc_name: String, f: impl Fn(&mut Self) -> Result) -> Result {
+    fn call_proc(
+        &mut self,
+        proc_name: String,
+        f: impl Fn(&mut Self) -> Result,
+    ) -> Result {
         let prev_proc_name = self.cur_proc_name.clone();
 
         self.cur_proc_name = Some(proc_name);
@@ -100,7 +104,11 @@ impl AoclaCtx {
         Ok(())
     }
 
-    fn call_aocla_proc(&mut self, proc_name: String, proc_body: Object) -> Result {
+    fn call_aocla_proc(
+        &mut self,
+        proc_name: String,
+        proc_body: Object,
+    ) -> Result {
         let prev_stack_frame = self.frame.clone();
 
         self.frame = Default::default();
@@ -112,7 +120,8 @@ impl AoclaCtx {
 
     fn dequote_and_push(&mut self, mut notq: Object) {
         match notq {
-            Object::Tuple(_, ref mut is_quoted) | Object::Sym(_, ref mut is_quoted) => {
+            Object::Tuple(_, ref mut is_quoted)
+            | Object::Sym(_, ref mut is_quoted) => {
                 *is_quoted = false;
             }
             _ => unreachable!(),
@@ -123,7 +132,9 @@ impl AoclaCtx {
     fn eval_tuple(&mut self, tuple: &[Object]) -> Result {
         for obj in tuple.iter().rev() {
             let Object::Sym(sym, _) = &obj else {
-                return Err(error!("Only objects of type Symbol can be captured"));
+                return Err(error!(
+                    "Only objects of type Symbol can be captured"
+                ));
             };
             let obj = self.stack.pop()?;
             self.frame.insert(sym.clone(), obj);
@@ -145,7 +156,9 @@ impl AoclaCtx {
                 .ok_or(error!("Unbound procedure `{}`", sym))?;
             match proc {
                 Proc::Rust(f) => self.call_proc(sym.clone(), *f)?,
-                Proc::Aocla(o) => self.call_aocla_proc(sym.clone(), o.clone())?,
+                Proc::Aocla(o) => {
+                    self.call_aocla_proc(sym.clone(), o.clone())?
+                }
             }
         }
         Ok(())
@@ -164,7 +177,9 @@ impl AoclaCtx {
                         self.dequote_and_push(obj.clone());
                     } else {
                         if self.stack.len() < tuple.len() {
-                            return Err(error!("Out of stack while capturing local variable"));
+                            return Err(error!(
+                                "Out of stack while capturing local variable"
+                            ));
                         }
                         self.eval_tuple(tuple)?;
                     }
@@ -209,9 +224,10 @@ fn proc_compare(ctx: &mut AoclaCtx) -> Result {
     let ord = match (&a_obj, &b_obj) {
         (Int(a), Int(b)) => a.cmp(b),
         (Bool(a), Bool(b)) => a.cmp(b),
-        (Str(a), Str(b)) | (Sym(a, _), Sym(b, _)) | (Str(a), Sym(b, _)) | (Sym(b, _), Str(a)) => {
-            a.cmp(b)
-        }
+        (Str(a), Str(b))
+        | (Sym(a, _), Sym(b, _))
+        | (Str(a), Sym(b, _))
+        | (Sym(b, _), Str(a)) => a.cmp(b),
         (List(a), List(b))
         | (Tuple(a, _), Tuple(b, _))
         | (List(a), Tuple(b, _))
@@ -244,14 +260,14 @@ fn proc_boolean(ctx: &mut AoclaCtx) -> Result {
             return Err(error!("Expected object of type Bool"));
         }
     } else {
-        let rigth_obj = ctx.stack.pop()?;
-        let left_obj = ctx.stack.pop()?;
-        let (Object::Bool(left), Object::Bool(right)) = (left_obj, rigth_obj) else {
+        let b_obj = ctx.stack.pop()?;
+        let a_obj = ctx.stack.pop()?;
+        let (Object::Bool(a), Object::Bool(b)) = (a_obj, b_obj) else {
             return Err(error!("Both objects must be of type Bool"));
         };
         ctx.stack.push(Object::Bool(match ctx.cur_proc_name()? {
-            "and" => left && right,
-            "or" => left || right,
+            "and" => a && b,
+            "or" => a || b,
             _ => unreachable!(),
         }));
     }
@@ -376,7 +392,9 @@ fn proc_while(ctx: &mut AoclaCtx) -> Result {
     loop {
         ctx.eval(&loop_cond)?;
         let Object::Bool(state) = ctx.stack.pop()? else {
-            return Err(error!("`while` condition must push Bool value to stack"));
+            return Err(error!(
+                "`while` condition must push Bool value to stack"
+            ));
         };
         if !state {
             break;
@@ -449,7 +467,9 @@ fn proc_prepend(ctx: &mut AoclaCtx) -> Result {
 
 fn proc_len(ctx: &mut AoclaCtx) -> Result {
     match ctx.stack.pop()? {
-        Object::List(s) | Object::Tuple(s, _) => ctx.stack.push(Object::Int(s.len() as _)),
+        Object::List(s) | Object::Tuple(s, _) => {
+            ctx.stack.push(Object::Int(s.len() as _))
+        }
         Object::Str(s) => ctx.stack.push(Object::Int(s.len() as _)),
         _ => {
             return Err(error!(
@@ -497,12 +517,8 @@ fn eval_file<P>(filename: P) -> Result
 where
     P: AsRef<Path>,
 {
-    let Ok(buf) = fs::read_to_string(&filename) else {
-        panic!(
-            "Failed to read file: {:?}. Does it exists?",
-            filename.as_ref()
-        );
-    };
+    let buf = fs::read_to_string(filename)
+        .map_err(|err| error!("Failed to read file: {}", err))?;
 
     let root_obj = parser::parse_root(&buf).map_err(string_to_error)?;
 
