@@ -56,4 +56,3 @@ What i *would* like to add:
 - [ ] Better-looking REPL (with history and syntax highlighting)
 - [x] Procedures for dealing with lists (~~<- (prepend)~~, ~~-> (append)~~, ~~:: (cons)~~, ~~@ (get)~~)
 - [x] Procedures for dealing with strings
-- [ ] C or/and Rust interoperability. Why not?
