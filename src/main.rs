@@ -461,8 +461,6 @@ fn proc_len(ctx: &mut AoclaCtx) -> Result {
     Ok(())
 }
 
-/// Consumes **List** or **Tuple** from stack and push `head` and `tail` of sequence to stack.
-/// Will return error if `object` on stack is not **List** nor **Tuple**.
 fn proc_cons(ctx: &mut AoclaCtx) -> Result {
     let seq = ctx.stack.pop()?;
     match &seq {
