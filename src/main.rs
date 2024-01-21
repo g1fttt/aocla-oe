@@ -448,8 +448,7 @@ fn proc_prepend(ctx: &mut AoclaCtx) -> Result {
 }
 
 fn proc_len(ctx: &mut AoclaCtx) -> Result {
-    let seq = ctx.stack.pop()?;
-    match seq {
+    match ctx.stack.pop()? {
         Object::List(s) | Object::Tuple(s, _) => ctx.stack.push(Object::Int(s.len() as _)),
         Object::Str(s) => ctx.stack.push(Object::Int(s.len() as _)),
         _ => {
@@ -522,16 +521,16 @@ fn repl() -> Result {
         let mut buf = String::new();
         io::stdin().read_line(&mut buf).map_err(to_error)?;
 
-        match buf.trim() {
+        let result = match buf.trim() {
             "quit" => break,
             code => match parser::parse_root(code) {
-                Ok(root_obj) => {
-                    if let Err(err) = ctx.eval(&root_obj) {
-                        eprintln!("{}", err);
-                    }
-                }
-                Err(err) => eprintln!("{}", err),
+                Ok(root_obj) => ctx.eval(&root_obj),
+                Err(err) => Err(error!("{}", err)),
             },
+        };
+
+        if let Err(err) = result {
+            eprintln!("{}", err);
         }
     }
     Ok(())
