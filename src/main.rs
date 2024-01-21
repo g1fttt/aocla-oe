@@ -12,12 +12,17 @@ use error::*;
 use parser::Object;
 use stack::Stack;
 
+type ProcFrame = HashMap<String, Object>;
+
 #[rustfmt::skip]
 #[derive(Debug)]
 enum Proc<F: Fn(&mut AoclaCtx) -> Result =
     fn(&mut AoclaCtx) -> Result>
 {
-    Aocla(Object),
+    Aocla {
+        body: Object,
+        frame: ProcFrame,
+    },
     Rust(F),
 }
 
@@ -25,7 +30,7 @@ enum Proc<F: Fn(&mut AoclaCtx) -> Result =
 struct AoclaCtx {
     stack: Stack,
     proc: HashMap<String, Proc>,
-    frame: HashMap<String, Object>,
+    frame: ProcFrame,
     cur_proc_name: Option<String>,
     cur_object: Option<Object>,
 }
@@ -43,9 +48,20 @@ impl AoclaCtx {
             .ok_or(error!("Not inside procedure"))
     }
 
-    fn add_string_proc(&mut self, proc_name: &str, proc_body: &str) -> Result {
+    fn add_string_proc(
+        &mut self,
+        proc_name: &str,
+        proc_body: &str,
+        proc_frame: ProcFrame,
+    ) -> Result {
         let proc = parser::parse_root(proc_body).map_err(string_to_error)?;
-        self.add_proc(proc_name, Proc::Aocla(proc));
+        self.add_proc(
+            proc_name,
+            Proc::Aocla {
+                body: proc,
+                frame: proc_frame,
+            },
+        );
         Ok(())
     }
 
@@ -84,9 +100,9 @@ impl AoclaCtx {
         self.add_rust_proc("while", proc_while);
         self.add_rust_proc("len", proc_len);
         self.add_rust_proc("eval", proc_eval);
-        self.add_string_proc("dup", "(x) $x $x")?;
-        self.add_string_proc("swap", "(x y) $y $x")?;
-        self.add_string_proc("drop", "(_)")?;
+        self.add_string_proc("dup", "(x) $x $x", ProcFrame::new())?;
+        self.add_string_proc("swap", "(x y) $y $x", ProcFrame::new())?;
+        self.add_string_proc("drop", "(_)", ProcFrame::new())?;
         Ok(())
     }
 
@@ -108,10 +124,11 @@ impl AoclaCtx {
         &mut self,
         proc_name: String,
         proc_body: Object,
+        proc_frame: ProcFrame,
     ) -> Result {
         let prev_stack_frame = self.frame.clone();
 
-        self.frame = Default::default();
+        self.frame = proc_frame;
         self.call_proc(proc_name, |ctx| ctx.eval(&proc_body))?;
         self.frame = prev_stack_frame;
 
@@ -156,9 +173,11 @@ impl AoclaCtx {
                 .ok_or(error!("Unbound procedure `{}`", sym))?;
             match proc {
                 Proc::Rust(f) => self.call_proc(sym.clone(), *f)?,
-                Proc::Aocla(o) => {
-                    self.call_aocla_proc(sym.clone(), o.clone())?
-                }
+                Proc::Aocla { body, frame } => self.call_aocla_proc(
+                    sym.clone(),
+                    body.clone(),
+                    frame.clone(),
+                )?,
             }
         }
         Ok(())
@@ -329,6 +348,7 @@ fn proc_proc(ctx: &mut AoclaCtx) -> Result {
         ));
     };
 
+    let proc_frame = ctx.frame.clone();
     let proc_body = ctx.stack.pop()?;
     if !matches!(proc_body, Object::List(_)) {
         return Err(error!(
@@ -336,7 +356,13 @@ fn proc_proc(ctx: &mut AoclaCtx) -> Result {
         ));
     }
 
-    ctx.add_proc(&proc_name, Proc::Aocla(proc_body));
+    ctx.add_proc(
+        &proc_name,
+        Proc::Aocla {
+            body: proc_body,
+            frame: proc_frame,
+        },
+    );
 
     Ok(())
 }
