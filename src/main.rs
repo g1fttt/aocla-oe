@@ -48,18 +48,13 @@ impl AoclaCtx {
             .ok_or(error!("Not inside procedure"))
     }
 
-    fn add_string_proc(
-        &mut self,
-        proc_name: &str,
-        proc_body: &str,
-        proc_frame: ProcFrame,
-    ) -> Result {
+    fn add_string_proc(&mut self, proc_name: &str, proc_body: &str) -> Result {
         let proc = parser::parse_root(proc_body).map_err(string_to_error)?;
         self.add_proc(
             proc_name,
             Proc::Aocla {
                 body: proc,
-                frame: proc_frame,
+                frame: ProcFrame::new(),
             },
         );
         Ok(())
@@ -100,9 +95,9 @@ impl AoclaCtx {
         self.add_rust_proc("while", proc_while);
         self.add_rust_proc("len", proc_len);
         self.add_rust_proc("eval", proc_eval);
-        self.add_string_proc("dup", "(x) $x $x", ProcFrame::new())?;
-        self.add_string_proc("swap", "(x y) $y $x", ProcFrame::new())?;
-        self.add_string_proc("drop", "(_)", ProcFrame::new())?;
+        self.add_string_proc("dup", "(x) $x $x")?;
+        self.add_string_proc("swap", "(x y) $y $x")?;
+        self.add_string_proc("drop", "(_)")?;
         Ok(())
     }
 
