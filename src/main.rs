@@ -14,15 +14,11 @@ use stack::Stack;
 
 type ProcFrame = HashMap<String, Object>;
 
-#[rustfmt::skip]
-#[derive(Debug)]
-enum Proc<F: Fn(&mut AoclaCtx) -> Result =
-    fn(&mut AoclaCtx) -> Result>
+enum Proc<F = fn(&mut AoclaCtx) -> Result>
+where
+    F: Fn(&mut AoclaCtx) -> Result,
 {
-    Aocla {
-        body: Object,
-        frame: ProcFrame,
-    },
+    Aocla { body: Object, frame: ProcFrame },
     Rust(F),
 }
 
@@ -48,12 +44,12 @@ impl AoclaCtx {
             .ok_or(error!("Not inside procedure"))
     }
 
-    fn add_string_proc(&mut self, proc_name: &str, proc_body: &str) -> Result {
-        let proc = parser::parse_root(proc_body).map_err(string_to_error)?;
+    fn add_string_proc(&mut self, name: &str, body: &str) -> Result {
+        let body = parser::parse_root(body).map_err(string_to_error)?;
         self.add_proc(
-            proc_name,
+            name,
             Proc::Aocla {
-                body: proc,
+                body,
                 frame: ProcFrame::new(),
             },
         );
@@ -276,9 +272,11 @@ fn proc_boolean(ctx: &mut AoclaCtx) -> Result {
     } else {
         let b_obj = ctx.stack.pop()?;
         let a_obj = ctx.stack.pop()?;
+
         let (Object::Bool(a), Object::Bool(b)) = (a_obj, b_obj) else {
             return Err(error!("Both objects must be of type Bool"));
         };
+
         ctx.stack.push(Object::Bool(match ctx.cur_proc_name()? {
             "and" => a && b,
             "or" => a || b,
@@ -337,27 +335,22 @@ fn print_proc(ctx: &mut AoclaCtx) -> Result {
 }
 
 fn proc_proc(ctx: &mut AoclaCtx) -> Result {
-    let Object::Sym(proc_name, _) = ctx.stack.pop()? else {
+    let Object::Sym(name, _) = ctx.stack.pop()? else {
         return Err(error!(
             "The object naming the procedure must be of type Symbol"
         ));
     };
 
-    let proc_frame = ctx.frame.clone();
-    let proc_body = ctx.stack.pop()?;
-    if !matches!(proc_body, Object::List(_)) {
+    let body = ctx.stack.pop()?;
+    if !matches!(body, Object::List(_)) {
         return Err(error!(
             "The object representing the body of the procedure must be of type List"
         ));
     }
 
-    ctx.add_proc(
-        &proc_name,
-        Proc::Aocla {
-            body: proc_body,
-            frame: proc_frame,
-        },
-    );
+    let frame = ctx.frame.clone();
+
+    ctx.add_proc(&name, Proc::Aocla { body, frame });
 
     Ok(())
 }
@@ -398,20 +391,20 @@ fn proc_if(ctx: &mut AoclaCtx) -> Result {
 }
 
 fn proc_while(ctx: &mut AoclaCtx) -> Result {
-    let loop_body = ctx.stack.pop()?;
-    if !matches!(loop_body, Object::List(_)) {
+    let body = ctx.stack.pop()?;
+    if !matches!(body, Object::List(_)) {
         return Err(error!("`while` body must be of type List"));
     }
 
-    let loop_cond = ctx.stack.pop()?;
-    if !matches!(loop_cond, Object::List(_)) {
+    let cond = ctx.stack.pop()?;
+    if !matches!(cond, Object::List(_)) {
         return Err(error!(
             "`while` condition must be of type List, that push Bool value to stack"
         ));
     }
 
     loop {
-        ctx.eval(&loop_cond)?;
+        ctx.eval(&cond)?;
         let Object::Bool(state) = ctx.stack.pop()? else {
             return Err(error!(
                 "`while` condition must push Bool value to stack"
@@ -420,7 +413,7 @@ fn proc_while(ctx: &mut AoclaCtx) -> Result {
         if !state {
             break;
         }
-        ctx.eval(&loop_body)?;
+        ctx.eval(&body)?;
     }
     Ok(())
 }

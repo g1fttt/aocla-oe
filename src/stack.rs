@@ -1,7 +1,7 @@
 use crate::error::*;
 use crate::parser::Object;
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Stack(Vec<Object>);
 
 impl Stack {
